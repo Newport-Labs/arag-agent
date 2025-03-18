@@ -2,8 +2,12 @@ from setuptools import find_packages, setup
 
 setup(
     name="arag",
-    version="0.1.3",
+    version="0.1.4",
     packages=find_packages(),
+    package_data={
+        "arag": ["prompts/*.yml"],
+    },
+    include_package_data=True,
     install_requires=[
         "openai",
         "pydantic",

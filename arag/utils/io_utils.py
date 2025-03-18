@@ -1,5 +1,6 @@
 import os
 
+import pkg_resources
 import yaml
 from yaml import SafeLoader
 
@@ -20,6 +21,17 @@ yaml.add_constructor("!include", include_constructor, SafeLoader)
 
 
 def load_yaml(filepath: str) -> dict:
-    with open(filepath, "r") as file:
+    # Check if filepath is absolute
+    if os.path.isabs(filepath):
+        yaml_path = filepath
+    else:
+        # Try to get the filepath as a package resource
+        try:
+            yaml_path = pkg_resources.resource_filename("arag", filepath)
+        except (ImportError, pkg_resources.DistributionNotFound):
+            # Fall back to relative path
+            yaml_path = filepath
+    
+    with open(yaml_path, "r") as file:
         prompts = yaml.safe_load(file)
     return prompts
