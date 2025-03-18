@@ -122,7 +122,7 @@ class ARag:
 
         return rewritten_queries
 
-    def _retrieve_chunks(self, queries: List[str], num_chunks: Optional[int] = 3) -> List[str]:
+    def _retrieve_chunks(self, queries: List[str], num_chunks: Optional[int] = 1) -> List[str]:
         self._update_status(
             "action-retrieve",
             self.process_agent.perform_action(query=queries, action="retrieve_information")
@@ -302,7 +302,7 @@ class ARag:
 
         def process_single_query(new_query):
             rewritten_query = self._rewrite_queries(query=new_query)
-            chunks = self._retrieve_chunks(queries=rewritten_query, num_chunks=2)
+            chunks = self._retrieve_chunks(queries=rewritten_query, num_chunks=1)
 
             return self._knowledge(query=new_query, chunks=chunks)
 
@@ -330,7 +330,7 @@ class ARag:
         rewritten_queries = self._rewrite_queries(query=query)
 
         # Step 2: Retrieve relevant chunks
-        chunks = self._retrieve_chunks(queries=rewritten_queries, num_chunks=3)
+        chunks = self._retrieve_chunks(queries=rewritten_queries, num_chunks=1)
 
         # Step 3: Now, form knowledge/facts from retrieved chunks
         self._update_status(

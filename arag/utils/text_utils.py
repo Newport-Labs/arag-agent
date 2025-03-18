@@ -224,7 +224,7 @@ def align_text_images(text):
 
 
 def perform_similarity_search(
-    vectordb_endopoint: str, queries: List[str], threshold, section: Optional[str] = None, num_chunks: int = 3
+    vectordb_endopoint: str, queries: List[str], threshold, section: Optional[str] = None, num_chunks: int = 1
 ) -> List[str]:
     chunks = []
     paths = []
