@@ -18,12 +18,6 @@ ARAG is an agent-based pipeline for retrieval-augmented generation (RAG) focused
 - 🐍 Python 3.10 or newer
 - 🔑 Google AI API key
 
-### Install from PyPI
-
-```bash
-pip install arag
-```
-
 ### Install from source
 
 ```bash
