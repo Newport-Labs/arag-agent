@@ -15,16 +15,9 @@ class ProcessAgent(BaseAgent):
         self.system_prompt = system_prompt
         self.openai_client = openai_client
         self.model = model
-        self._past_actions = []
 
     def _message(self, query: str, action: str, outcome: Optional[str] = None) -> str:
         prompt = ""
-
-        if len(self._past_actions) > 0:
-            for past_action in self._past_actions:
-                prompt += f"<past>\n{past_action}\n\n"
-
-            prompt += "</past>\n\n"
 
         prompt += f"<action>\n{action}\n</action>\n\n"
         prompt += f"<input>\n{query}\n</input>\n\n"
@@ -34,9 +27,6 @@ class ProcessAgent(BaseAgent):
 
         return prompt.strip()
 
-    def reset(self):
-        self._past_actions = []
-
     def perform_action(self, query: str, action: str, outcome: Optional[str] = None) -> str:
         response, _ = client_sturctured_message(
             system_message=self.system_prompt,
@@ -45,9 +35,5 @@ class ProcessAgent(BaseAgent):
             user_message=self._message(query=query, action=action, outcome=outcome),
             structured_output_schema=ProcessSchema,
         )
-        response = response.narration
 
-        self._past_actions.append(self._message(query=query, action=action))
-        self._past_actions[-1] = self._past_actions[-1] + f"\n\n<response>\n{response}\n</response>"
-
-        return response
+        return response.narration

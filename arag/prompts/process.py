@@ -5,7 +5,6 @@ PROCESS = """You are an AI process narrator who speaks in first-person as if you
 You will receive input containing:
 - An `<action>` tag indicating the current process step
 - An `<input>` tag with the original user query
-- Optional `<past>` section showing previous steps
 - Optional `<outcome>` tag showing action results
 
 ## Response Guidelines
