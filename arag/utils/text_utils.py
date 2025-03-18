@@ -9,6 +9,120 @@ from sklearn.metrics.pairwise import cosine_similarity
 from .vectordb_utils import _get_chunks, embed_text
 
 
+def fix_markdown_tables(markdown_text):
+    """
+    Fix various formatting issues in Markdown tables using regex.
+    
+    This function corrects common problems in Markdown tables:
+    - Missing pipe characters (|) at the beginning or end of rows
+    - Inconsistent number of columns across rows
+    - Missing or malformed separator row (between header and data)
+    - Irregular spacing and alignment issues
+    - Preserves alignment markers in separator rows (:---:, :---, ---:)
+    
+    Args:
+        markdown_text (str): Text containing potentially malformed Markdown tables
+        
+    Returns:
+        str: Text with fixed Markdown tables
+    """
+    lines = markdown_text.split('\n')
+    in_table = False
+    current_table = []
+    result = []
+    
+    # Process the text line by line to identify tables
+    for line in lines:
+        # Check if the line looks like part of a table (contains pipe character)
+        # Skip code blocks (lines starting with ```)
+        if '|' in line and not line.strip().startswith('```'):
+            if not in_table:
+                in_table = True
+            current_table.append(line)
+        else:
+            # If we were in a table but this line isn't part of it
+            if in_table:
+                # Fix and add the table we've collected
+                fixed_table = fix_table(current_table)
+                result.extend(fixed_table)
+                current_table = []
+                in_table = False
+            # Add the non-table line
+            result.append(line)
+    
+    # Handle a table at the end of the text
+    if in_table:
+        fixed_table = fix_table(current_table)
+        result.extend(fixed_table)
+    
+    return '\n'.join(result)
+
+def fix_table(table_lines):
+    """Fix a single Markdown table."""
+    # Remove any empty lines and clean up each line
+    rows = [row.strip() for row in table_lines if row.strip()]
+    if not rows:
+        return table_lines
+    
+    # Make sure all rows have pipes at start and end
+    for i in range(len(rows)):
+        if not rows[i].startswith('|'):
+            rows[i] = '| ' + rows[i]
+        if not rows[i].endswith('|'):
+            rows[i] = rows[i] + ' |'
+    
+    # Find the maximum number of columns in any row
+    max_cols = 0
+    for row in rows:
+        cols = row.strip('|').split('|')
+        max_cols = max(max_cols, len(cols))
+    
+    # Check for a separator row (contains dashes)
+    has_separator = False
+    separator_idx = -1
+    
+    for i, row in enumerate(rows):
+        if i > 0 and '-' in row and re.search(r'\|\s*[:]*[-]+[:]*\s*\|', row):
+            has_separator = True
+            separator_idx = i
+            break
+    
+    # If no separator row found and we have multiple rows, add one after the first row
+    if not has_separator and len(rows) > 1:
+        separator = '| ' + ' | '.join(['---'] * max_cols) + ' |'
+        rows.insert(1, separator)
+        separator_idx = 1
+    
+    # Process each row to ensure consistent columns and formatting
+    fixed_rows = []
+    
+    for i, row in enumerate(rows):
+        cols = row.strip('|').split('|')
+        cols = [col.strip() for col in cols]
+        
+        # Special handling for the separator row
+        if i == separator_idx:
+            separators = []
+            for j in range(max_cols):
+                if j < len(cols) and re.match(r'^:?-+:?$', cols[j]):
+                    # Preserve alignment markers
+                    separators.append(cols[j])
+                else:
+                    # Default separator
+                    separators.append('---')
+
+            fixed_rows.append('| ' + ' | '.join(separators) + ' |')
+        else:
+            # For data rows, ensure consistent column count
+            while len(cols) < max_cols:
+                cols.append('')  # Add empty cells if needed
+            cols = cols[:max_cols]  # Truncate if too many
+
+            fixed_rows.append('| ' + ' | '.join(cols) + ' |')
+
+    return fixed_rows
+
+
 def deduplicate_by_similarity(chunks, similarity_threshold=0.85, embeddings=None, paths=None):
     """
     Deduplicate a list of texts based on the cosine similarity of their embeddings.
@@ -139,6 +253,11 @@ def has_similar_vector(vector, embedding_list, threshold):
 
 
 def fix_path_formatting(text):
+    # Replace incorrect closing brackets with parentheses for path references
+    pattern1 = r"(\[\d+\]\(PATH_PLACEHOLDER#page=\d+)\]"
+    text = re.sub(pattern1, r"\1)", text)
+    text = text.replace("<br>", "")
+
     # Convert PATH_PLACE_HOLDER to PATH_PLACEHOLDER
     text = text.replace("PATH_PLACE_HOLDER", "PATH_PLACEHOLDER")
 
