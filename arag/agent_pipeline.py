@@ -176,7 +176,7 @@ class ARag:
                     queries=[section_query],
                     threshold=1.0,
                     section=section,
-                    num_chunks=2,
+                    num_chunks=1,
                 )
 
                 enriched_chunks = [
