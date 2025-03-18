@@ -7,7 +7,7 @@ from .utils.agent_primitives import client_sturctured_message
 
 
 class ProcessSchema(BaseModel):
-    response: str
+    narration: str
 
 
 class ProcessAgent(BaseAgent):
@@ -42,7 +42,7 @@ class ProcessAgent(BaseAgent):
             user_message=self._message(query=query, action=action, outcome=outcome),
             structured_output_schema=ProcessSchema,
         )
-        response = response.response
+        response = response.narration
 
         self._past_actions.append(self._message(query=query, action=action))
         self._past_actions[-1] = self._past_actions[-1] + f"\n\n<response>\n{response}\n</response>"

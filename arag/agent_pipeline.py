@@ -10,9 +10,9 @@ from arag.arag_agents import (AnswerAgent, ConciseAnswerAgent, DecisionAgent,
                               ProcessAgent, QueryRewriterAgent)
 from arag.arag_agents.utils.memory_layer import AgentMemory
 from arag.prompts import PROMPTS
-from arag.utils.text_utils import (align_text_images, extract_section,
-                                   fix_markdown_tables, fix_path_formatting,
-                                   has_similar_vector,
+from arag.utils.text_utils import (align_text_images, convert_references,
+                                   extract_section, fix_markdown_tables,
+                                   fix_path_formatting, has_similar_vector,
                                    perform_similarity_search)
 
 
@@ -134,7 +134,7 @@ class ARag:
 
         self._update_status(
             "action-retrieve",
-            self.process_agent.perform_action(query=queries, action="retrieve_information_successful", outcome=chunks)
+            self.process_agent.perform_action(query=queries, action="retrieve_information_successful", outcome=f"{len(chunks)} chunks found")
         )
 
         if len(self._retrieved_chunks_embeddings) == 0:
@@ -223,10 +223,6 @@ class ARag:
     def _decision(self, query: str) -> str:
         knowledge = self.memory.retrieve()
 
-        self._update_status(
-                "action-decision",
-                self.process_agent.perform_action(query=query, action="answer_decision")
-            )
         decision = self.decision_agent.perform_action(query=query, knowledge=knowledge)
 
         if decision == "answer":
@@ -237,7 +233,7 @@ class ARag:
         else:
             self._update_status(
                 "action-decision",
-                self.process_agent.perform_action(query=query + "\n" + knowledge, action="answer_decision_unsuccessful_info_needed", outcome=decision)
+                self.process_agent.perform_action(query=query, action="answer_decision_unsuccessful_info_needed", outcome=decision)
             )
 
         return decision
@@ -263,7 +259,7 @@ class ARag:
             evaluation = self.evaluator_agent.perform_action(query=query, knowledge=knowledge, answer=answer)
             self._update_status(
                 "action-evaluate",
-                self.process_agent.perform_action(query=answer, action="evaluate_answer", outcome=evaluation)
+                self.process_agent.perform_action(query=answer, action="evaluate_answer_successful", outcome=evaluation)
             )
 
             if json.loads(evaluation)["approval"] == "yes":
@@ -278,10 +274,15 @@ class ARag:
             )
             self._update_status(
                 "action-improve",
-                self.process_agent.perform_action(query=evaluation, action="improve_answer", outcome=answer)
+                self.process_agent.perform_action(query=evaluation, action="improve_answer_successful", outcome=answer)
             )
 
-        return fix_path_formatting(align_text_images(answer)).strip()
+        self._update_status(
+            "action-answer",
+            "Let me formulate the final answer... 🤔"
+        )
+
+        return convert_references(fix_path_formatting(align_text_images(answer))).strip()
 
     def _fill_knowledge_gaps(
         self,
@@ -291,12 +292,12 @@ class ARag:
 
         self._update_status(
             "action-knowledge-gaps",
-            self.process_agent.perform_action(query=query + "\n" + knowledge, action="knowledge_gaps_filling")
+            self.process_agent.perform_action(query=query, action="knowledge_gaps_filling")
         )
         queries, _ = self.knowledge_gaps_agent.perform_action(query=query, knowledge=knowledge)
         self._update_status(
             "action-knowledge-gaps",
-            self.process_agent.perform_action(query=query + "\n" + knowledge, action="knowledge_gaps_filling_successful", outcome=queries)
+            self.process_agent.perform_action(query=query, action="knowledge_gaps_filling_successful", outcome=queries)
         )
 
         def process_single_query(new_query):
@@ -333,7 +334,7 @@ class ARag:
         # Step 3: Now, form knowledge/facts from retrieved chunks
         self._update_status(
             "action-info-extraction",
-            self.process_agent.perform_action(query=query, action="information_extraction")
+            self.process_agent.perform_action(query=f"{len(chunks)} chunks found", action="information_extraction")
         )
         self._knowledge(query=query, chunks=chunks)
 

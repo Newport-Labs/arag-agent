@@ -94,11 +94,7 @@ def convert_references(text):
         replacement = f"[{ref_data['number']}](PATH_PLACEHOLDER#page={ref_data['page']})"
         result_text = result_text.replace(ref, replacement)
     
-    # Create a list of unique references for reference
-    ref_list = [{"original": ref, "number": data['number'], "page": data['page']} 
-                for ref, data in unique_refs.items()]
-    
-    return result_text, ref_list
+    return result_text
 
 
 def fix_table(table_lines):
