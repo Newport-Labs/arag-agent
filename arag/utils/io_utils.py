@@ -31,7 +31,7 @@ def load_yaml(filepath: str) -> dict:
         except (ImportError, pkg_resources.DistributionNotFound):
             # Fall back to relative path
             yaml_path = filepath
-    
+
     with open(yaml_path, "r") as file:
         prompts = yaml.safe_load(file)
     return prompts
