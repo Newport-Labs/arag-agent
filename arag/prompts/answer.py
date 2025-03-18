@@ -148,7 +148,6 @@ If including images, use markdown syntax exactly as follows:
 
 ```
 ![Image Description](IMG_PLACEHOLDER/filename.jpeg)
-*Figure X: Detailed Image Description, Page Y*
 ```
 
 When placing images:

@@ -69,6 +69,5 @@ For large tables:
 ### Image Format
 ```
 ![Description](IMG_PLACEHOLDER/filename.jpeg)
-*Figure X: Detailed Description, Page Y*
 ```
 Note: Use IMG_PLACEHOLDER instead of the original path prefix. For example, if the original path is "pdf_md/images_page_255_Figure_8.jpeg", use "IMG_PLACEHOLDER/images_page_255_Figure_8.jpeg". Do NOT include reference numbers in image captions. Do NOT reference images with inline citations."""
