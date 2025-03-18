@@ -1,0 +1,6 @@
+openai
+pydantic
+numpy
+yml
+scikit-learn
+tiktoken
