@@ -57,6 +57,50 @@ def fix_markdown_tables(markdown_text):
     
     return '\n'.join(result)
 
+
+def convert_references(text):
+    # Define the regex pattern to match references like [Manual Name, Page 165, Section 5.7]
+    pattern = r'\[(.*?), Page (\d+)(?:, Section [\d\.]+)?\]'
+    
+    # Find all matches in the text
+    matches = re.findall(pattern, text)
+    
+    # Create a dictionary to store unique references and their replacement numbers
+    unique_refs = {}
+    ref_counter = 1
+    
+    # First pass: identify unique references and assign numbers
+    for match in matches:
+        manual_name = match[0]
+        page_number = match[1]
+        full_match = f"[{manual_name}, Page {page_number}"
+        if ", Section" in text[text.find(full_match):text.find(full_match) + 50]:
+            # Find the section part if it exists
+            section_part = re.search(r'(, Section [\d\.]+)', text[text.find(full_match):text.find(full_match) + 50])
+            if section_part:
+                full_match += section_part.group(1)
+        full_match += "]"
+        
+        if full_match not in unique_refs:
+            unique_refs[full_match] = {
+                'number': ref_counter,
+                'page': page_number
+            }
+            ref_counter += 1
+    
+    # Second pass: replace references in the text
+    result_text = text
+    for ref, ref_data in unique_refs.items():
+        replacement = f"[{ref_data['number']}](PATH_PLACEHOLDER#page={ref_data['page']})"
+        result_text = result_text.replace(ref, replacement)
+    
+    # Create a list of unique references for reference
+    ref_list = [{"original": ref, "number": data['number'], "page": data['page']} 
+                for ref, data in unique_refs.items()]
+    
+    return result_text, ref_list
+
+
 def fix_table(table_lines):
     """Fix a single Markdown table."""
     # Remove any empty lines and clean up each line
