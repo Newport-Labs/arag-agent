@@ -9,7 +9,7 @@ from arag.arag_agents import (AnswerAgent, ConciseAnswerAgent, DecisionAgent,
                               KnowledgeAgent, KnowledgeGapsAgent,
                               MissingInfoAgent, QueryRewriterAgent)
 from arag.arag_agents.utils.memory_layer import AgentMemory
-from arag.utils.io_utils import load_yaml
+from arag.prompts import PROMPTS
 from arag.utils.text_utils import (align_text_images, extract_section,
                                    fix_path_formatting, has_similar_vector,
                                    perform_similarity_search)
@@ -23,7 +23,7 @@ class ARag:
         vectordb_endopoint: str = "http://localhost:5000/api/query",
         status_callback: Optional[Callable[[str, str], Any]] = None,
     ) -> None:
-        self.system_prompts = load_yaml("arag/prompts/prompts.yml")
+        self.system_prompts = PROMPTS
         self.model = "gemini-2.0-flash"
         self._vectordb_endpoint = vectordb_endopoint
         self.status_callback = status_callback
@@ -49,61 +49,61 @@ class ARag:
 
     def _init_agents(self) -> None:
         self.query_rewrite_agent = QueryRewriterAgent(
-            system_prompt=self.system_prompts["query_rewrite"]["content"],
+            system_prompt=self.system_prompts["query_rewrite"],
             openai_client=self.openai_client,
             model=self.model,
         )
 
         self.missing_info_agent = MissingInfoAgent(
-            system_prompt=self.system_prompts["missing_info"]["content"],
+            system_prompt=self.system_prompts["missing_info"],
             openai_client=self.openai_client,
             model=self.model,
         )
 
         self.knowledge_agent = KnowledgeAgent(
-            system_prompt=self.system_prompts["knowledge"]["content"],
+            system_prompt=self.system_prompts["knowledge"],
             openai_client=self.openai_client,
             model=self.model,
         )
 
         self.decision_agent = DecisionAgent(
-            system_prompt=self.system_prompts["decision"]["content"],
+            system_prompt=self.system_prompts["decision"],
             openai_client=self.openai_client,
             model=self.model,
         )
 
         self.answer_agent = AnswerAgent(
-            system_prompt=self.system_prompts["answer"]["content"],
+            system_prompt=self.system_prompts["answer"],
             openai_client=self.openai_client,
             model=self.model,
         )
 
         self.concise_answer_agent = ConciseAnswerAgent(
-            system_prompt=self.system_prompts["concise_answer"]["content"],
+            system_prompt=self.system_prompts["concise_answer"],
             openai_client=self.openai_client,
             model=self.model,
         )
 
         self.evaluator_agent = EvaluatorAgent(
-            system_prompt=self.system_prompts["evaluator"]["content"],
+            system_prompt=self.system_prompts["evaluator"],
             openai_client=self.openai_client,
             model=self.model,
         )
 
         self.improver_agent = ImproverAgent(
-            system_prompt=self.system_prompts["improver"]["content"],
+            system_prompt=self.system_prompts["improver"],
             openai_client=self.openai_client,
             model=self.model,
         )
 
         self.knowledge_gaps_agent = KnowledgeGapsAgent(
-            system_prompt=self.system_prompts["knowledge_gaps"]["content"],
+            system_prompt=self.system_prompts["knowledge_gaps"],
             openai_client=self.openai_client,
             model=self.model,
         )
 
         self.formatter_agent = FormatterAgent(
-            system_prompt=self.system_prompts["formatter"]["content"],
+            system_prompt=self.system_prompts["formatter"],
             openai_client=self.openai_client,
             model=self.model,
         )
