@@ -23,7 +23,7 @@ class ARag:
         vectordb_endopoint: str = "http://localhost:5000/api/query",
         status_callback: Optional[Callable[[str, str], Any]] = None,
     ) -> None:
-        self.system_prompts = load_yaml("./prompts/prompts.yml")
+        self.system_prompts = load_yaml("arag/prompts/prompts.yml")
         self.model = "gemini-2.0-flash"
         self._vectordb_endpoint = vectordb_endopoint
         self.status_callback = status_callback
