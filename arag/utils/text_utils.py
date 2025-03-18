@@ -139,10 +139,6 @@ def has_similar_vector(vector, embedding_list, threshold):
 
 
 def fix_path_formatting(text):
-    # Replace incorrect closing brackets with parentheses for path references
-    pattern1 = r"(\[\d+\]\(PATH_PLACEHOLDER#page=\d+)\]"
-    text = re.sub(pattern1, r"\1)", text)
-
     # Convert PATH_PLACE_HOLDER to PATH_PLACEHOLDER
     text = text.replace("PATH_PLACE_HOLDER", "PATH_PLACEHOLDER")
 

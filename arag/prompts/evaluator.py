@@ -34,7 +34,7 @@ EVALUATOR = """You evaluate technical answers about equipment repairs against qu
   - Only relevant columns/rows from large tables
   - Tables properly formatted with headers preserved
   - Visual elements distributed throughout answer
-  - Tables properly referenced with numbered citations [1](PATH_PLACEHOLDER#page=x)
+  - **CRITICAL**: Tables properly referenced with numbered citations [1](PATH_PLACEHOLDER#page=[page number])
   - Image captions include page number but NOT reference citations
   - Images NOT referenced with numbered citations
   - ONLY includes images explicitly referenced in the knowledge
@@ -43,7 +43,7 @@ EVALUATOR = """You evaluate technical answers about equipment repairs against qu
 
 6. **References**
   - All sources cited using numbered references in the text [1], [2], etc.
-  - References formatted exactly as: [1](PATH_PLACEHOLDER#page=x)
+  - **CRITICAL**: References MUST be formatted EXACTLY as: [1](PATH_PLACEHOLDER#page=[page number])
   - No separate References section at the end of the document
   - Uses PATH_PLACEHOLDER instead of actual paths (actual paths will be added later)
   - Every technical claim and table has corresponding numbered reference
