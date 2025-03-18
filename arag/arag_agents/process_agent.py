@@ -34,6 +34,9 @@ class ProcessAgent(BaseAgent):
 
         return prompt.strip()
 
+    def reset(self):
+        self._past_actions = []
+
     def perform_action(self, query: str, action: str, outcome: Optional[str] = None) -> str:
         response, _ = client_sturctured_message(
             system_message=self.system_prompt,

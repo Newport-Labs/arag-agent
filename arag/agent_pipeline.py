@@ -324,6 +324,7 @@ class ARag:
     def search(self, query: str) -> str:
         # For the moment, we clear the agent memory at the beggining of each asnwer.
         self.memory.reset()
+        self.process_agent.reset()
 
         # Step 1: Rewrite query
         rewritten_queries = self._rewrite_queries(query=query)
