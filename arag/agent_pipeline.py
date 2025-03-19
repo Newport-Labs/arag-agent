@@ -264,7 +264,7 @@ class ARag:
         if knowledge_added:
             self._update_status(
                 "action-answer",
-                self.process_agent.perform_action(query=query, action=f"answer_with_retriever_missing_information")
+                self.process_agent.perform_action(query=query, action=f"answer_with_newly_added_missing_information")
             )
             knowledge = self.memory.retrieve()
             answer = self._answer(query=query, knowledge=knowledge)
