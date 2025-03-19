@@ -1,4 +1,6 @@
+import os
 import re
+import urllib.parse
 from typing import List, Optional
 
 import numpy as np
@@ -312,7 +314,3 @@ def add_spacing_around_divs(text):
     text = re.sub(r"(</div>)\s*(<div)", r"\1\n\n\2", text)
 
     return text
-
-
-def remove_trailing_hashes(text):
-    return re.sub(r'#+$', '', text).strip()

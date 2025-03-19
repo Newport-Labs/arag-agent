@@ -4,14 +4,54 @@ from collections import defaultdict
 
 
 def extract_page_numbers(text):
-    # Define the regex pattern to find page numbers
-    pattern = r"[Pp]age\s+(\d+)"
+    # Pattern for standard "Page X" format
+    single_pattern = r"[Pp]age\s+(\d+)"
 
-    # Find all matches in the text
-    matches = re.findall(pattern, text)
+    # Pattern for comma or space-separated page numbers (e.g., "Page 22, 23, 24" or "Pages 22-24")
+    multi_pattern = r"[Pp]ages?\s+(\d+)(?:[\s,]+(\d+))*"
+    range_pattern = r"[Pp]ages?\s+(\d+)[- ](\d+)"
 
-    # Return the list of page numbers
-    return matches
+    # Find all standard matches
+    single_matches = re.findall(single_pattern, text)
+
+    # Find potential multi-page references
+    multi_matches = re.findall(multi_pattern, text)
+
+    # Find range references
+    range_matches = re.findall(range_pattern, text)
+
+    # Process the results
+    page_numbers = single_matches.copy()
+
+    # Add multi-page references (this will catch sequences like "Page 22, 23, 24")
+    for match in multi_matches:
+        for page in match:
+            if page and page not in page_numbers:
+                page_numbers.append(page)
+
+    # Process page ranges (like "Pages 22-24")
+    for start, end in range_matches:
+        start_num = int(start)
+        end_num = int(end)
+        for page_num in range(start_num, end_num + 1):
+            page_str = str(page_num)
+            if page_str not in page_numbers:
+                page_numbers.append(page_str)
+
+    # Additional pattern for lists in brackets like "[Manual Name, Page 22, 23, 24]"
+    bracket_pattern = r"\[[^\]]*[Pp]age\s+(\d+)(?:[,\s]+(\d+))*\]"
+    bracket_matches = re.findall(bracket_pattern, text)
+
+    # Process bracket matches
+    for match in bracket_matches:
+        for page in match:
+            if page and page not in page_numbers:
+                page_numbers.append(page)
+
+    # Final cleanup - remove any empty strings and ensure unique values
+    page_numbers = [page for page in page_numbers if page]
+
+    return list(set(page_numbers))
 
 
 def extract_references_with_context(text):
@@ -48,16 +88,26 @@ def order_dict_by_keys(input_dict) -> dict:
 def process_content_references(answer, knowledge, fact_checker) -> str:
     results = extract_references_with_context(answer)
 
+    # Get all unique references in the answer
+    all_refs = set([ref[0] for _, ref in results])
+
     # Step 1: Group content by reference
-    references = defaultdict(str)
+    references = defaultdict(list)
 
     def group_by_reference(item):
         content, ref = item
-        references[ref[0]] += content + "\n\n"
+        references[ref[0]].append(content)
 
     # Process in parallel
     with concurrent.futures.ThreadPoolExecutor() as executor:
         list(executor.map(group_by_reference, results))
+
+    updated_references = {}
+
+    for ref, content in references.items():
+        updated_references[ref] = "\n\n".join(content[1:3])
+
+    references = updated_references
 
     # Strip content
     for ref in references:
@@ -65,49 +115,86 @@ def process_content_references(answer, knowledge, fact_checker) -> str:
 
     # Step 2: Find matching pages for each reference
     ref_pages = {}
+    used_pages = set()  # Track which pages have already been used
 
-    def find_matching_pages(ref_content_pair):
-        reference, content = ref_content_pair
+    # Make a copy of knowledge to be able to remove chunks as they're processed
+    remaining_chunks = knowledge.copy()
 
-        # Search chunks in parallel
-        def check_chunk(chunk):
+    # First check for existing references in the answer
+    existing_ref_pattern = r"\[(\d+)\]\(PATH_PLACEHOLDER#page=(\d+(?:-\d+)?)\)"
+    existing_refs = re.findall(existing_ref_pattern, answer)
+
+    # Add existing references to ref_pages and mark pages as used
+    for ref_num, page_range in existing_refs:
+        ref_num = int(ref_num)
+        if "-" in page_range:
+            start, end = map(int, page_range.split("-"))
+            pages = list(range(start, end + 1))
+        else:
+            pages = [int(page_range)]
+
+        ref_pages[ref_num] = pages
+        for page in pages:
+            used_pages.add(page)
+
+    # Process references that don't have pages yet
+    refs_to_process = sorted([(int(ref), content) for ref, content in references.items() if int(ref) not in ref_pages])
+
+    # Process each reference sequentially
+    for reference, content in refs_to_process:
+        matching_pages = []
+        chunks_to_remove = []
+
+        # First, check all remaining chunks to find matches
+        for chunk_idx, chunk in enumerate(remaining_chunks):
             response = fact_checker.perform_action(query=content, context=chunk)
             if response == "yes":
-                page = extract_page_numbers(chunk)
-                return page
-            return None
+                pages = extract_page_numbers(chunk)
+                pages = [int(p) for p in pages if p]
 
-        with concurrent.futures.ThreadPoolExecutor() as chunk_executor:
-            # Process chunks until we find a match
-            for page in chunk_executor.map(check_chunk, knowledge):
-                if page is not None:
-                    return reference, [int(p) for p in page]
+                # Filter out pages already used
+                available_pages = [p for p in pages if p not in used_pages]
 
-        return reference, None
+                if available_pages:
+                    # Add available pages to our matches
+                    matching_pages.extend(available_pages)
+                    # Mark these pages as used
+                    for page in available_pages:
+                        used_pages.add(page)
+                    # Mark this chunk for removal
+                    chunks_to_remove.append(chunk_idx)
+                    # Once we find a match with available pages, we can stop
+                    break
 
-    # Process all references in parallel
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        for reference, pages in executor.map(find_matching_pages, references.items()):
-            if pages is not None:
-                ref_pages[reference] = pages
+        # Remove the used chunks (starting from the end to avoid index shifting)
+        for idx in sorted(chunks_to_remove, reverse=True):
+            remaining_chunks.pop(idx)
+
+        # Store the matching pages for this reference
+        if matching_pages:
+            ref_pages[reference] = matching_pages
 
     # Step 3: Order dictionary and format answer
-    ref_pages = order_dict_by_keys(ref_pages)
+    ref_pages = {k: ref_pages[k] for k in sorted(ref_pages.keys())}
 
     # Create a list of all replacements to make
     replacements = []
 
-    for idx, (reference, page) in enumerate(ref_pages.items()):
-        if len(page) == 1:
+    for idx, (reference, pages) in enumerate(ref_pages.items()):
+        if pages and len(pages) == 1:
             if reference == idx + 1:
                 old_ref = f"[{reference}]"
-                new_ref = f"[{reference}](PATH_PLACEHOLDER#page={page[0]})"
+                new_ref = f"[{reference}](PATH_PLACEHOLDER#page={pages[0]})"
             else:
                 old_ref = f"[{idx + 1}]"
-                new_ref = f"[{idx + 1}](PATH_PLACEHOLDER#page={page[0]})"
-        elif len(page) > 1:
-            min_page = min(page)
-            max_page = max(page)
+                new_ref = f"[{idx + 1}](PATH_PLACEHOLDER#page={pages[0]})"
+
+            replacements.append((old_ref, new_ref))
+
+        elif pages and len(pages) > 1:
+            min_page = min(pages)
+            max_page = max(pages)
+
             if reference == idx + 1:
                 old_ref = f"[{reference}]"
                 new_ref = f"[{reference}](PATH_PLACEHOLDER#page={min_page}-{max_page})"
@@ -115,12 +202,19 @@ def process_content_references(answer, knowledge, fact_checker) -> str:
                 old_ref = f"[{idx + 1}]"
                 new_ref = f"[{idx + 1}](PATH_PLACEHOLDER#page={min_page}-{max_page})"
 
-        replacements.append((old_ref, new_ref))
+            replacements.append((old_ref, new_ref))
 
+    # Apply all replacements
     for old_ref, new_ref in replacements:
         # Only replace if the exact pattern [X] is found (not already replaced)
         pattern = re.escape(old_ref)
         answer = re.sub(pattern + r"(?!\()", new_ref, answer)
+
+    # Check if all references in the original answer were replaced
+    for ref in all_refs:
+        ref_pattern = f"\\[{ref}\\](?!\\()"
+        if re.search(ref_pattern, answer):
+            print(f"Warning: Reference [{ref}] was not replaced in the answer.")
 
     return answer
 
@@ -163,11 +257,8 @@ def process_images_parallel(answer, knowledge, image_extractor) -> str:
 
             reference_present, page, type, type_number = image_extractor.perform_action(query=image_text, context=chunk)
             if reference_present:
-                # Clean the image path
                 image = f"IMG_PLACEHOLDER/_page_{page}_{type}_{type_number}.jpeg"
-
                 return image
-
             return None
 
         # Process knowledge chunks in parallel for each image
@@ -175,7 +266,6 @@ def process_images_parallel(answer, knowledge, image_extractor) -> str:
             for result in chunk_executor.map(check_chunk, knowledge):
                 if result is not None:
                     return image_text, result
-
         return image_text, None
 
     # Process all images in parallel
