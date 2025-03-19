@@ -14,7 +14,7 @@ class AgentMemory:
                 memory != ""
                 and len(self._tokenizer.encode(memory)) < 4096
                 and "sorry" not in memory.lower()
-                and "does not contain" in memory.lower()
+                and "does not contain" not in memory.lower()
             ):
                 self._memories.append(memory)
 
