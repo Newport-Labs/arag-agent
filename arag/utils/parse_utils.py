@@ -161,11 +161,13 @@ def process_images_parallel(answer, knowledge, image_extractor) -> str:
             if "![" not in chunk:
                 return None
 
-            reference_present, image = image_extractor.perform_action(query=image_text, context=chunk)
+            reference_present, page, type, type_number = image_extractor.perform_action(query=image_text, context=chunk)
             if reference_present:
                 # Clean the image path
-                clean_image = image.replace("(", "").replace(")", "").replace("images/", "IMG_PLACEHOLDER/")
-                return clean_image
+                image = f"IMG_PLACEHOLDER/_page_{page}_{type}_{type_number}.jpeg"
+
+                return image
+
             return None
 
         # Process knowledge chunks in parallel for each image

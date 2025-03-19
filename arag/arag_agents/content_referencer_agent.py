@@ -23,7 +23,7 @@ class ContentReferencerAgent(BaseAgent):
         return prompt
 
     def perform_action(self, query: str, context: str) -> str:
-        response, usage_metadata = client_sturctured_message(
+        response, _ = client_sturctured_message(
             system_message=self.system_prompt,
             openai_client=self.openai_client,
             model=self.model,
@@ -31,4 +31,4 @@ class ContentReferencerAgent(BaseAgent):
             structured_output_schema=ContentReferencerSchema,
         )
 
-        return response.decision, usage_metadata
+        return response.decision
