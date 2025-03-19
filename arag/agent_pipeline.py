@@ -4,16 +4,21 @@ from typing import Any, Callable, List, Optional
 
 from openai import OpenAI
 
-from arag.arag_agents import (AnswerAgent, ConciseAnswerAgent, DecisionAgent,
-                              EvaluatorAgent, ImproverAgent, KnowledgeAgent,
+from arag.arag_agents import (AnswerAgent, ConciseAnswerAgent,
+                              ContentReferencerAgent, DecisionAgent,
+                              EvaluatorAgent, ImageReferencerAgent,
+                              ImproverAgent, KnowledgeAgent,
                               KnowledgeGapsAgent, MissingInfoAgent,
                               ProcessAgent, QueryRewriterAgent)
 from arag.arag_agents.utils.memory_layer import AgentMemory
 from arag.prompts import PROMPTS
-from arag.utils.text_utils import (align_text_images, convert_references,
+from arag.utils.parse_utils import (process_content_references,
+                                    process_images_parallel)
+from arag.utils.text_utils import (align_text_images, convert_citations,
                                    extract_section, fix_markdown_tables,
-                                   fix_path_formatting, has_similar_vector,
-                                   perform_similarity_search)
+                                   has_similar_vector,
+                                   perform_similarity_search,
+                                   remove_hash_lines, remove_reference_section)
 
 
 class ARag:
@@ -109,6 +114,18 @@ class ARag:
             model=self.model,
         )
 
+        self.content_referencer_agent = ContentReferencerAgent(
+            system_prompt=self.system_prompts["content_referencer"],
+            openai_client=self.openai_client,
+            model=self.model,
+        )
+
+        self.image_referencer_agent = ImageReferencerAgent(
+            system_prompt=self.system_prompts["image_referencer"],
+            openai_client=self.openai_client,
+            model=self.model,
+        )
+
     def _rewrite_queries(self, query: str) -> str:
         self._update_status(
             "action-rewrite",
@@ -117,7 +134,7 @@ class ARag:
         rewritten_queries = self.query_rewrite_agent.perform_action(query=query)
         self._update_status(
             "action-rewrite",
-            self.process_agent.perform_action(query=query, action="query_rewrite_successful", outcome=rewritten_queries)
+            self.process_agent.perform_action(query=query, action="query_rewrite_successful", outcome=rewritten_queries[:-1])
         )
 
         return rewritten_queries
@@ -216,7 +233,7 @@ class ARag:
 
         # Flatten the list of lists into a single list
         for knowledge_items in results:
-            extracted_knowledge.extend(knowledge_items)
+            extracted_knowledge.append(knowledge_items)
 
         self.memory.update(extracted_knowledge)
 
@@ -254,12 +271,12 @@ class ARag:
         while not self._evaluator_decision and current_idx < self._evaluator_max_retry:
             self._update_status(
                 "action-evaluate",
-                self.process_agent.perform_action(query=answer, action="evaluate_answer")
+                self.process_agent.perform_action(query=answer, action=f"evaluate_answer_iteration_{current_idx + 1}")
             )
             evaluation = self.evaluator_agent.perform_action(query=query, knowledge=knowledge, answer=answer)
             self._update_status(
                 "action-evaluate",
-                self.process_agent.perform_action(query=answer, action="evaluate_answer_successful", outcome=evaluation)
+                self.process_agent.perform_action(query=answer, action=f"evaluate_answer_successful_iteration_{current_idx + 1}", outcome=evaluation)
             )
 
             if json.loads(evaluation)["approval"] == "yes":
@@ -267,22 +284,27 @@ class ARag:
 
             self._update_status(
                 "action-improve",
-                self.process_agent.perform_action(query=evaluation, action="improve_answer")
+                self.process_agent.perform_action(query=evaluation, action=f"improve_answer_iteration_{current_idx + 1}")
             )
             answer = self.improver_agent.perform_action(
                 query=query, answer=answer, evaluation=evaluation, knowledge=knowledge
             )
             self._update_status(
                 "action-improve",
-                self.process_agent.perform_action(query=evaluation, action="improve_answer_successful", outcome=answer)
+                self.process_agent.perform_action(query=evaluation, action=f"improve_answer_successful_iteration_{current_idx + 1}", outcome=answer)
             )
 
-        self._update_status(
-            "action-answer",
-            "Let me formulate the final answer... 🤔"
+            current_idx += 1
+
+        answer = convert_citations(answer)
+        answer = process_content_references(
+            answer=answer, knowledge=self.memory._memories, fact_checker=self.fact_referencer_agent
+        )
+        answer = process_images_parallel(
+            answer=answer, knowledge=self.memory._memories, image_extractor=self.image_referencer_agent
         )
 
-        return convert_references(fix_path_formatting(align_text_images(answer))).strip()
+        return align_text_images(answer).strip()
 
     def _fill_knowledge_gaps(
         self,
@@ -317,9 +339,13 @@ class ARag:
         try:
             answer = fix_markdown_tables(self.answer_agent.perform_action(query=query, knowledge=knowledge))
         except Exception as e:
+            self._update_status(
+                "action-concise-answer",
+                self.process_agent.perform_action(query=query, action="answer_failed_too_long_try_concise")
+            )
             answer = fix_markdown_tables(self.concise_answer_agent.perform_action(query=query, knowledge=knowledge))
 
-        return answer
+        return remove_hash_lines(remove_reference_section(answer)).strip()
 
     def search(self, query: str) -> str:
         # For the moment, we clear the agent memory at the beggining of each asnwer.

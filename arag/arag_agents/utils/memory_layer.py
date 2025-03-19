@@ -10,7 +10,12 @@ class AgentMemory:
 
     def update(self, memories: List[str]) -> None:
         for memory in memories:
-            if memory != "" or len(self._tokenizer.encode(memory)) < 4096:
+            if (
+                memory != ""
+                and len(self._tokenizer.encode(memory)) < 4096
+                and "sorry" not in memory.lower()
+                and "does not contain" in memory.lower()
+            ):
                 self._memories.append(memory)
 
     def _memory_pattern(self, memories: List[str]) -> str:

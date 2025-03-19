@@ -1,6 +1,4 @@
-import os
 import re
-import urllib.parse
 from typing import List, Optional
 
 import numpy as np
@@ -9,33 +7,49 @@ from sklearn.metrics.pairwise import cosine_similarity
 from .vectordb_utils import _get_chunks, embed_text
 
 
+def convert_citations(text):
+    # This regex finds patterns like [1, 2, 3] or [1,2,3] (with or without spaces)
+    pattern = r"\[(\d+(?:\s*,\s*\d+)+)\]"
+
+    def replacement(match):
+        # Extract the numbers from the matched group
+        numbers = re.findall(r"\d+", match.group(1))
+        # Create individual citations and join them
+        return "".join(f"[{num}]" for num in numbers)
+
+    # Replace all occurrences
+    result = re.sub(pattern, replacement, text)
+
+    return result
+
+
 def fix_markdown_tables(markdown_text):
     """
     Fix various formatting issues in Markdown tables using regex.
-    
+
     This function corrects common problems in Markdown tables:
     - Missing pipe characters (|) at the beginning or end of rows
     - Inconsistent number of columns across rows
     - Missing or malformed separator row (between header and data)
     - Irregular spacing and alignment issues
     - Preserves alignment markers in separator rows (:---:, :---, ---:)
-    
+
     Args:
         markdown_text (str): Text containing potentially malformed Markdown tables
-        
+
     Returns:
         str: Text with fixed Markdown tables
     """
-    lines = markdown_text.split('\n')
+    lines = markdown_text.split("\n")
     in_table = False
     current_table = []
     result = []
-    
+
     # Process the text line by line to identify tables
     for line in lines:
         # Check if the line looks like part of a table (contains pipe character)
         # Skip code blocks (lines starting with ```)
-        if '|' in line and not line.strip().startswith('```'):
+        if "|" in line and not line.strip().startswith("```"):
             if not in_table:
                 in_table = True
             current_table.append(line)
@@ -49,52 +63,13 @@ def fix_markdown_tables(markdown_text):
                 in_table = False
             # Add the non-table line
             result.append(line)
-    
+
     # Handle a table at the end of the text
     if in_table:
         fixed_table = fix_table(current_table)
         result.extend(fixed_table)
-    
-    return '\n'.join(result)
 
-
-def convert_references(text):
-    # Define the regex pattern to match references like [Manual Name, Page 165, Section 5.7]
-    pattern = r'\[(.*?), Page (\d+)(?:, Section [\d\.]+)?\]'
-    
-    # Find all matches in the text
-    matches = re.findall(pattern, text)
-    
-    # Create a dictionary to store unique references and their replacement numbers
-    unique_refs = {}
-    ref_counter = 1
-    
-    # First pass: identify unique references and assign numbers
-    for match in matches:
-        manual_name = match[0]
-        page_number = match[1]
-        full_match = f"[{manual_name}, Page {page_number}"
-        if ", Section" in text[text.find(full_match):text.find(full_match) + 50]:
-            # Find the section part if it exists
-            section_part = re.search(r'(, Section [\d\.]+)', text[text.find(full_match):text.find(full_match) + 50])
-            if section_part:
-                full_match += section_part.group(1)
-        full_match += "]"
-        
-        if full_match not in unique_refs:
-            unique_refs[full_match] = {
-                'number': ref_counter,
-                'page': page_number
-            }
-            ref_counter += 1
-    
-    # Second pass: replace references in the text
-    result_text = text
-    for ref, ref_data in unique_refs.items():
-        replacement = f"[{ref_data['number']}](PATH_PLACEHOLDER#page={ref_data['page']})"
-        result_text = result_text.replace(ref, replacement)
-    
-    return result_text
+    return "\n".join(result)
 
 
 def fix_table(table_lines):
@@ -103,67 +78,67 @@ def fix_table(table_lines):
     rows = [row.strip() for row in table_lines if row.strip()]
     if not rows:
         return table_lines
-    
+
     # Make sure all rows have pipes at start and end
     for i in range(len(rows)):
-        if not rows[i].startswith('|'):
-            rows[i] = '| ' + rows[i]
-        if not rows[i].endswith('|'):
-            rows[i] = rows[i] + ' |'
-    
+        if not rows[i].startswith("|"):
+            rows[i] = "| " + rows[i]
+        if not rows[i].endswith("|"):
+            rows[i] = rows[i] + " |"
+
     # Find the maximum number of columns in any row
     max_cols = 0
     for row in rows:
-        cols = row.strip('|').split('|')
+        cols = row.strip("|").split("|")
         max_cols = max(max_cols, len(cols))
-    
+
     # Check for a separator row (contains dashes)
     has_separator = False
     separator_idx = -1
-    
+
     for i, row in enumerate(rows):
-        if i > 0 and '-' in row and re.search(r'\|\s*[:]*[-]+[:]*\s*\|', row):
+        if i > 0 and "-" in row and re.search(r"\|\s*[:]*[-]+[:]*\s*\|", row):
             has_separator = True
             separator_idx = i
             break
-    
+
     # If no separator row found and we have multiple rows, add one after the first row
     if not has_separator and len(rows) > 1:
-        separator = '| ' + ' | '.join(['---'] * max_cols) + ' |'
+        separator = "| " + " | ".join(["---"] * max_cols) + " |"
         rows.insert(1, separator)
         separator_idx = 1
-    
+
     # Process each row to ensure consistent columns and formatting
     fixed_rows = []
-    
+
     for i, row in enumerate(rows):
-        cols = row.strip('|').split('|')
+        cols = row.strip("|").split("|")
         cols = [col.strip() for col in cols]
-        
+
         # Special handling for the separator row
         if i == separator_idx:
             separators = []
             for j in range(max_cols):
-                if j < len(cols) and re.match(r'^:?-+:?$', cols[j]):
+                if j < len(cols) and re.match(r"^:?-+:?$", cols[j]):
                     # Preserve alignment markers
                     separators.append(cols[j])
                 else:
                     # Default separator
-                    separators.append('---')
+                    separators.append("---")
 
-            fixed_rows.append('| ' + ' | '.join(separators) + ' |')
+            fixed_rows.append("| " + " | ".join(separators) + " |")
         else:
             # For data rows, ensure consistent column count
             while len(cols) < max_cols:
-                cols.append('')  # Add empty cells if needed
+                cols.append("")  # Add empty cells if needed
             cols = cols[:max_cols]  # Truncate if too many
 
-            fixed_rows.append('| ' + ' | '.join(cols) + ' |')
+            fixed_rows.append("| " + " | ".join(cols) + " |")
 
     return fixed_rows
 
 
-def deduplicate_by_similarity(chunks, similarity_threshold=0.85, embeddings=None, paths=None):
+def deduplicate_by_similarity(chunks, similarity_threshold=0.85, embeddings=None):
     """
     Deduplicate a list of texts based on the cosine similarity of their embeddings.
 
@@ -203,53 +178,47 @@ def deduplicate_by_similarity(chunks, similarity_threshold=0.85, embeddings=None
 
     return (
         [text for i, text in enumerate(chunks) if to_keep[i]],
-        [path for i, path in enumerate(paths) if to_keep[i]],
         [embedding for i, embedding in enumerate(embeddings) if to_keep[i]],
     )
 
 
 def align_text_images(text):
-    # Regular expression to match all images with IMG_PLACEHOLDER
-    image_pattern = r"!\[([^\]]*)\]\((IMG_PLACEHOLDER[^)]+)\)"
+    # Match any image markdown
+    image_pattern = r"!\[([^\]]*)\]\(([^)]+)\)"
 
     def replace_with_centered_image(match):
+        alt_text = match.group(1)
         image_path = match.group(2)
-        # Just center the image without adding descriptions
-        return f'<div style="text-align: center;">' f'<img src="{image_path}" alt=""/>' f"</div>"
+
+        # Add two newlines before the div to separate it from previous text
+        return (
+            '<div style="text-align: center;">'
+            f'<img src="{image_path}" alt="{alt_text}"/>'
+            f"<p>{alt_text}</p>"
+            "</div>"
+        )
 
     # Replace all image matches with centered images
     result = re.sub(image_pattern, replace_with_centered_image, text)
 
-    return result
+    return add_spacing_around_divs(result)
 
 
 def perform_similarity_search(
-    vectordb_endopoint: str, queries: List[str], threshold, section: Optional[str] = None, num_chunks: int = 1
+    vectordb_endopoint: str, queries: List[str], threshold, section: Optional[str] = None, num_chunks: int = 3
 ) -> List[str]:
     chunks = []
-    paths = []
     embeddings = []
 
     for query in queries:
         chunk = _get_chunks(vectordb_endopoint, query, num_chunks, section=section)
 
         for c in chunk:
-            pdf_path = (
-                "Manual name: "
-                + c["properties"]["pdf_file"]
-                + "\n"
-                + "PDF path: "
-                + os.path.join("./data", urllib.parse.quote(c["properties"]["pdf_file"]) + ".pdf")
-                + "\n\n"
-            )
             chunks.append(c["properties"]["text"])
-            paths.append(pdf_path)
             embeddings.append(c["vector"]["text_vector"])
 
     # Dedup exact chunks
-    chunks, paths, embeddings = deduplicate_by_similarity(
-        chunks=chunks, paths=paths, embeddings=embeddings, similarity_threshold=threshold
-    )
+    chunks, embeddings = deduplicate_by_similarity(chunks=chunks, embeddings=embeddings, similarity_threshold=threshold)
 
     return (chunks, embeddings)
 
@@ -292,19 +261,54 @@ def has_similar_vector(vector, embedding_list, threshold):
     return np.any(similarities > threshold)
 
 
-def fix_path_formatting(text):
-    # Replace incorrect closing brackets with parentheses for path references
-    pattern1 = r"(\[\d+\]\(PATH_PLACEHOLDER#page=\d+)\]"
-    text = re.sub(pattern1, r"\1)", text)
-    text = text.replace("<br>", "")
+def remove_hash_lines(text):
+    return re.sub(r"\n#+\n", "", text)
 
-    # Convert PATH_PLACE_HOLDER to PATH_PLACEHOLDER
-    text = text.replace("PATH_PLACE_HOLDER", "PATH_PLACEHOLDER")
 
-    # Convert IMG_PLACE_HOLDER to IMG_PLACEHOLDER
-    text = text.replace("IMG_PLACE_HOLDER", "IMG_PLACEHOLDER")
+def remove_reference_section(input_string):
+    # Pattern to match everything between the beginning (after "I have a")
+    # and before any number of "#" followed by "References" or "Reference"
+    pattern = r"([\s\S]*?)\s*#{1,}\s*References?"
 
-    # Convert /image/s/ to /images/
-    text = text.replace("/image/s/", "/images/")
+    # Search for the pattern
+    match = re.search(pattern, input_string)
+
+    if match:
+        return match.group(1).strip()
+    else:
+        return input_string
+
+
+def add_spacing_around_divs(text):
+    """
+    Ensures there are double newlines (\n\n) before and after <div> elements.
+
+    Args:
+        text (str): The input text containing div elements
+
+    Returns:
+        str: The text with proper spacing around div elements
+    """
+    # First, normalize any existing div spacing
+    # Replace any sequence of newlines before a div with a single newline
+    text = re.sub(r"\n+(<div)", r"\n\1", text)
+
+    # Replace any sequence of newlines after a closing div with a single newline
+    text = re.sub(r"(</div>)\n+", r"\1\n", text)
+
+    # Now add the double newlines before all div openings
+    text = re.sub(r"([^\n])\s*(<div)", r"\1\n\n\2", text)
+
+    # Add double newlines after all div closings
+    text = re.sub(r"(</div>)\s*([^\n])", r"\1\n\n\2", text)
+
+    # Handle special case: beginning of text with a div
+    text = re.sub(r"^(<div)", r"\1", text)
+
+    # Handle special case: end of text with a div
+    text = re.sub(r"(</div>)$", r"\1", text)
+
+    # Handle consecutive divs - ensure double newline between them
+    text = re.sub(r"(</div>)\s*(<div)", r"\1\n\n\2", text)
 
     return text
