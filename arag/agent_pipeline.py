@@ -200,7 +200,7 @@ class ARag:
                     queries=[section_query],
                     threshold=1.0,
                     section=section,
-                    num_chunks=1,
+                    num_chunks=2,
                 )
 
                 enriched_chunks = [
@@ -364,7 +364,7 @@ class ARag:
         rewritten_queries = self._rewrite_queries(query=query)
 
         # Step 2: Retrieve relevant chunks
-        chunks = self._retrieve_chunks(queries=rewritten_queries, num_chunks=2)
+        chunks = self._retrieve_chunks(queries=rewritten_queries, num_chunks=3)
 
         # Step 3: Now, form knowledge/facts from retrieved chunks
         self._update_status(
