@@ -18,7 +18,8 @@ from arag.utils.text_utils import (align_text_images, convert_citations,
                                    extract_section, fix_markdown_tables,
                                    has_similar_vector,
                                    perform_similarity_search,
-                                   remove_hash_lines, remove_reference_section)
+                                   remove_hash_lines, remove_reference_section,
+                                   remove_trailing_hashes)
 
 
 class ARag:
@@ -308,7 +309,7 @@ class ARag:
             image_extractor=self.image_referencer_agent
         )
 
-        return align_text_images(answer).strip()
+        return remove_trailing_hashes(align_text_images(answer)).strip()
 
     def _fill_knowledge_gaps(
         self,

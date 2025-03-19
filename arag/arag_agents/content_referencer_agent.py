@@ -28,7 +28,7 @@ class ContentReferencerAgent(BaseAgent):
             openai_client=self.openai_client,
             model=self.model,
             user_message=self._message(query=query, context=context),
-            structured_output_schema=FactReferencerSchema,
+            structured_output_schema=ContentReferencerSchema,
         )
 
         return response.decision, usage_metadata
