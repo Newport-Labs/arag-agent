@@ -298,10 +298,14 @@ class ARag:
 
         answer = convert_citations(answer)
         answer = process_content_references(
-            answer=answer, knowledge=self.memory._memories, fact_checker=self.fact_referencer_agent
+            answer=answer,
+            knowledge=self.memory._memories,
+            fact_checker=self.content_referencer_agent
         )
         answer = process_images_parallel(
-            answer=answer, knowledge=self.memory._memories, image_extractor=self.image_referencer_agent
+            answer=answer,
+            knowledge=self.memory._memories,
+            image_extractor=self.image_referencer_agent
         )
 
         return align_text_images(answer).strip()
