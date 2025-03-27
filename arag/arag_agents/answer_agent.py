@@ -1,6 +1,8 @@
+from typing import List
+
 from pydantic import BaseModel
 
-from .decorators.agent_registry import register_action
+from .decorators import register_action
 from .template_agent import BaseAgent
 from .utils.agent_primitives import client_sturctured_message
 
@@ -15,18 +17,30 @@ class AnswerAgent(BaseAgent):
         self.openai_client = openai_client
         self.model = model
 
-    def _message(self, query: str, knowledge: str) -> str:
-        prompt = f"<query>\n{query}\n</query>\n\n"
+    def _message(self, query: str, document_chunks: List[str], conversation_summary: str = None) -> str:
+        prompt = (
+            f"<conversation_summary>{conversation_summary}</conversation_summary>\n"
+            if conversation_summary is not None
+            else ""
+        )
+        prompt += f"<user_query>{query}</user_query>\n<document_chunks>\n"
 
-        return prompt + knowledge
+        for document_chunk in document_chunks:
+            prompt += f"<document_chunk>{document_chunk}</document_chunk>\n"
+
+        prompt += "</document_chunks>"
+
+        return prompt
 
     @register_action(action_name="action-answer")
-    def perform_action(self, query: str, knowledge: str) -> str:
+    def perform_action(self, query: str, document_chunks: List[str], conversation_summary: str = None) -> str:
         response, usage_metadata = client_sturctured_message(
             system_message=self.system_prompt,
             openai_client=self.openai_client,
             model=self.model,
-            user_message=self._message(query=query, knowledge=knowledge),
+            user_message=self._message(
+                query=query, document_chunks=document_chunks, conversation_summary=conversation_summary
+            ),
             structured_output_schema=AnswerSchema,
         )
 

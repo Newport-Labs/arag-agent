@@ -17,7 +17,7 @@ class ARag:
         self,
         api_key: str,
         user_id: str,
-        vectordb_endopoint: str = "http://localhost:5000/api/query",
+        vectordb_endopoint: str = "http://localhost:5000/api",
         status_callback: Optional[Callable[[str, str], Any]] = None,
     ) -> None:
         self.system_prompts = PROMPTS
