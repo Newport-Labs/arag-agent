@@ -192,97 +192,21 @@ def add_spacing_around_divs(text):
 
 def format_references(text):
     """
-    A robust function that:
-    1. Identifies all references in the format [number](page_number)
-    2. Ensures each page consistently uses a single reference number
-    3. Reorganizes reference numbers to be sequential (no gaps)
-    4. Replaces each page_number with doc1.pdf#page={page_number}
-
-    If the function encounters any errors, it will fall back to simply
-    replacing the page numbers with doc1.pdf#page={page_number}.
-
+    A simplified function that:
+    - Identifies references in the format [number](page_number)
+    - Replaces each page_number with doc1.pdf#page={page_number}
+    
     Args:
         text (str): The input text containing references
-
+        
     Returns:
-        str: Text with standardized, sequential references and replaced page links
+        str: Text with page links replaced with doc1.pdf#page={page_number}
     """
-    try:
-        # Regular expression to find references in the format [number](page_number)
-        regex = r"\[(\d+)\]\((\d+)\)"
+    import re
 
-        # Step 1: Find all unique reference numbers
-        all_refs = set()
-        for match in re.finditer(regex, text):
-            all_refs.add(int(match.group(1)))
-
-        # Step 2: Map pages to all their reference numbers and count occurrences
-        page_to_refs = defaultdict(list)
-        for match in re.finditer(regex, text):
-            ref_num = int(match.group(1))
-            page_num = match.group(2)
-            page_to_refs[page_num].append(ref_num)
-
-        # Step 3: Determine the canonical reference number for each page
-        # Use the most frequent reference, or the lowest if tied
-        canonical_refs = {}
-        for page_num, ref_nums in page_to_refs.items():
-            # Count the frequency of each reference number
-            ref_counts = {}
-            for ref in ref_nums:
-                ref_counts[ref] = ref_counts.get(ref, 0) + 1
-
-            # Find the most frequent references
-            max_count = max(ref_counts.values())
-            most_common_refs = [ref for ref, count in ref_counts.items() if count == max_count]
-
-            # Use the lowest number if there's a tie
-            canonical_refs[page_num] = min(most_common_refs)
-
-        # Step 4: Create a mapping of reference numbers to their new sequential numbers
-        unique_canonical_refs = sorted(set(canonical_refs.values()))
-        ref_to_new_ref = {old_ref: i + 1 for i, old_ref in enumerate(unique_canonical_refs)}
-
-        # Step 5: Create a mapping of all original references to their new format
-        replacements = {}
-        for match in re.finditer(regex, text):
-            original = match.group(0)
-            ref_num = int(match.group(1))
-            page_num = match.group(2)
-
-            # Get the canonical reference number for this page
-            canonical_ref = canonical_refs[page_num]
-
-            # Get the new sequential reference number
-            new_ref = ref_to_new_ref[canonical_ref]
-
-            # Create the replacement with the new sequential reference
-            replacement = f"[{new_ref}](doc1.pdf#page={page_num})"
-            replacements[original] = replacement
-
-        # Step 6: Apply all replacements (from longest match to shortest to avoid partial matches)
-        result = text
-        for original, replacement in sorted(replacements.items(), key=lambda x: -len(x[0])):
-            result = result.replace(original, replacement)
-
-        # Generate a report of standardizations and sequencing made
-        ref_changes = defaultdict(set)
-        for page_num, ref_nums in page_to_refs.items():
-            canonical_ref = canonical_refs[page_num]
-            new_ref = ref_to_new_ref[canonical_ref]
-            for ref in set(ref_nums):
-                if ref != new_ref:
-                    ref_changes[ref].add(new_ref)
-
-        report_lines = []
-        for old_ref, new_refs in sorted(ref_changes.items()):
-            if len(new_refs) == 1:
-                new_ref = list(new_refs)[0]
-                report_lines.append(f"Reference [{old_ref}] changed to [{new_ref}]")
-
-        return result, "\n".join(report_lines)
-
-    except Exception as e:
-        # Fallback: just replace page numbers with doc1.pdf#page={page_number}
-        fallback_result = re.sub(r"\[(\d+)\]\((\d+)\)", lambda m: f"[{m.group(1)}](doc1.pdf#page={m.group(2)})", text)
-        return fallback_result, f"Error during reference standardization: {str(e)}. Applied simple page replacement."
+    # Regular expression to find references in the format [number](page_number)
+    result = re.sub(r"\[(\d+)\]\((\d+)\)", 
+                    lambda m: f"[{m.group(1)}](doc1.pdf#page={m.group(2)})", 
+                    text)
+    
+    return result
