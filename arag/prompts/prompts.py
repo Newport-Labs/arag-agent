@@ -1,8 +1,9 @@
 from .answer import ANSWER
-from .citation_integrator import CITATION_INTEGRATOR
 from .default import DEFAULT
 from .document_selection import DOCUMENT_SELECTION
+from .evaluator import EVALUATOR
 from .images_integrator import IMAGE_INTEGRATOR
+from .improver import IMPROVER
 from .knowledge import KNOWLEDGE_EXTRACTOR
 from .process import PROCESS
 from .query_rewrite import QUERY_REWRITE
@@ -14,6 +15,7 @@ PROMPTS = {
     "knowledge_extractor": KNOWLEDGE_EXTRACTOR,
     "answer": ANSWER,
     "images_integrator": IMAGE_INTEGRATOR,
-    "citation_integrator": CITATION_INTEGRATOR,
+    "evlauator": EVALUATOR,
+    "improver": IMPROVER,
     "document_selection": DOCUMENT_SELECTION,
 }

@@ -3,10 +3,12 @@ from typing import Any, Callable, List, Optional
 
 from openai import OpenAI
 
-from arag.arag_agents import (AnswerAgent, CitationAgent,
-                              DocumentSelectionAgent, ImageReferencerAgent,
-                              KnowledgeAgent, ProcessAgent, QueryRewriterAgent)
+from arag.arag_agents import (AnswerAgent, DocumentSelectionAgent,
+                              EvaluatorAgent, ImageReferencerAgent,
+                              ImproverAgent, KnowledgeAgent, ProcessAgent,
+                              QueryRewriterAgent)
 from arag.prompts import PROMPTS
+from arag.utils.citation_system import CitationSystem
 from arag.utils.text_utils import (align_text_images, fix_markdown_tables,
                                    format_references)
 from arag.utils.vectordb_utils import _get_chunks, _get_metadata
@@ -25,6 +27,7 @@ class ARag:
         self._vectordb_endpoint = vectordb_endopoint
         self.status_callback = status_callback
         self.user_id = user_id
+        self.citation_system = CitationSystem()
 
         self._retrieved_knowledge = []
 
@@ -61,14 +64,20 @@ class ARag:
             model=self.model,
         )
 
-        self.process_agent = ProcessAgent(
-            system_prompt=self.system_prompts["process"],
+        self.evaluator_agent = EvaluatorAgent(
+            system_prompt=self.system_prompts["improver"],
             openai_client=self.openai_client,
             model=self.model,
         )
 
-        self.citation_agent = CitationAgent(
-            system_prompt=self.system_prompts["citation_integrator"],
+        self.improver_agent = ImproverAgent(
+            system_prompt=self.system_prompts["improver"],
+            openai_client=self.openai_client,
+            model=self.model,
+        )
+
+        self.process_agent = ProcessAgent(
+            system_prompt=self.system_prompts["process"],
             openai_client=self.openai_client,
             model=self.model,
         )
@@ -227,13 +236,59 @@ class ARag:
             ),
         )
 
+        merged_knowledge = "\n".join(extracted_knowledge)
+
         # Add status update for answer generation
         self._update_status("action-answer", self.process_agent.perform_action(query=query, action="generating_answer"))
         draft_answer = self.answer_agent.perform_action(query=query, document_chunks=extracted_knowledge)
-        _answer = draft_answer
         self._update_status(
             "action-answer", self.process_agent.perform_action(query=query, action="generating_answer_successful")
         )
+
+        _loop_count = 0
+
+        # Add evaluation and improvement loop
+        while _loop_count <= 3:
+            # Add status update for evaluation
+            self._update_status(
+                "action-evaluate", 
+                self.process_agent.perform_action(query=query, action=f"evaluate_answer_iteration_{_loop_count + 1}")
+            )
+            improvement_decision, feedback = self.evaluator_agent.perform_action(
+                query=query, knowledge_chunks=merged_knowledge, answer=draft_answer
+            )
+            self._update_status(
+                "action-evaluate",
+                self.process_agent.perform_action(
+                    query=query, 
+                    action=f"evaluate_answer_successful_iteration_{_loop_count + 1}", 
+                    outcome=f"Improvement needed: {not improvement_decision}"
+                ),
+            )
+
+            if improvement_decision:
+                break
+
+            # Add status update for improvement
+            self._update_status(
+                "action-improve", 
+                self.process_agent.perform_action(query=query, action=f"improve_answer_iteration_{_loop_count + 1}")
+            )
+            draft_answer = self.improver_agent.perform_action(
+                query=query, original_answer=draft_answer, knowledge_chunks=merged_knowledge, feedback=feedback
+            )
+            self._update_status(
+                "action-improve",
+                self.process_agent.perform_action(
+                    query=query, 
+                    action=f"improve_answer_successful_iteration_{_loop_count + 1}", 
+                    outcome="Answer improved based on feedback"
+                ),
+            )
+            
+            _loop_count += 1
+
+        _answer = draft_answer
 
         # Add status update for image referencing
         self._update_status(
@@ -253,13 +308,13 @@ class ARag:
         self._update_status(
             "action-citation", self.process_agent.perform_action(query=query, action="adding_citations")
         )
-        citation_knowledge = "\n\n".join(extracted_knowledge)
-        answer = self.citation_agent.perform_action(answer=_answer, section=citation_knowledge)
-        self._update_status(
-            "action-citation", self.process_agent.perform_action(query=query, action="adding_citations_successful")
-        )
-
-        answer = fix_markdown_tables(align_text_images(answer))
+        answer = fix_markdown_tables(align_text_images(_answer))
         answer, _ = format_references(answer)
 
-        return answer.strip()
+        final_answer = self.citation_system(answer=answer, chunks_text=merged_knowledge)
+        self._update_status(
+            "action-citation",
+            self.process_agent.perform_action(query=query, action="adding_citations_successful"),
+        )
+
+        return final_answer
