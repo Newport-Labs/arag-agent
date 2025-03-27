@@ -310,7 +310,9 @@ class ARag:
         )
         answer = fix_markdown_tables(align_text_images(_answer))
 
-        final_answer = self.citation_system.process_citations(answer=answer, chunks_text=merged_knowledge)
+        final_answer = self.citation_system.process_citations(answer=answer,
+                                                              chunks_text=merged_knowledge,
+                                                              threshold=0.3)
         self._update_status(
             "action-citation",
             self.process_agent.perform_action(query=query, action="adding_citations_successful"),
