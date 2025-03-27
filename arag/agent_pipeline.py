@@ -309,12 +309,12 @@ class ARag:
             "action-citation", self.process_agent.perform_action(query=query, action="adding_citations")
         )
         answer = fix_markdown_tables(align_text_images(_answer))
-        answer, _ = format_references(answer)
 
         final_answer = self.citation_system.process_citations(answer=answer, chunks_text=merged_knowledge)
         self._update_status(
             "action-citation",
             self.process_agent.perform_action(query=query, action="adding_citations_successful"),
         )
+        final_answer, _ = format_references(final_answer)
 
         return final_answer
