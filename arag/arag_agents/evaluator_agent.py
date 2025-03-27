@@ -1,8 +1,8 @@
 from typing import List, Literal
 
+from decorators.agent_registry import register_action
 from pydantic import BaseModel
 
-from .decorators import register_action
 from .template_agent import BaseAgent
 from .utils.agent_primitives import client_sturctured_message
 

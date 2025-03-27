@@ -1,10 +1,12 @@
+import concurrent.futures
 import re
+from collections import defaultdict
 from typing import List, Optional
 
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
-from .vectordb_utils import _get_chunks, embed_text
+from .vectordb_utils import _get_chunks, get_raw_section
 
 
 def convert_citations(text):
@@ -138,7 +140,7 @@ def fix_table(table_lines):
     return fixed_rows
 
 
-def deduplicate_by_similarity(chunks, similarity_threshold=0.85, embeddings=None):
+def deduplicate_by_similarity(chunks, embeddings, similarity_threshold=0.85):
     """
     Deduplicate a list of texts based on the cosine similarity of their embeddings.
 
@@ -151,14 +153,6 @@ def deduplicate_by_similarity(chunks, similarity_threshold=0.85, embeddings=None
     """
     if not chunks:
         return []
-
-    if embeddings is None:
-        # Get embeddings for each text
-        embeddings = []
-
-        for chunk in chunks:
-            embedding = embed_text(chunk)["vector"]
-            embeddings.append(embedding)
 
     # Convert to numpy array for easier processing
     embeddings_array = np.array(embeddings)
@@ -314,8 +308,253 @@ def add_spacing_around_divs(text):
     return text
 
 
-def remove_trailing_hashes(text):
-    text = re.sub(r'#+$', '', text).strip()
-    text = text.replace("<br>", " ")
+def extract_section_numbers(text: str) -> List[str]:
+    """
+    Extract section numbers from text in various formats and layouts:
+    - "Section X.Y" references
+    - "X.Y:" with colon
+    - "X. Title" at line start
+    - "X.Y.Z. Title.." with varying punctuation
+    - Nested indented sections with various formats
 
-    return text
+    Args:
+        text (str): Input text containing section references
+
+    Returns:
+        List[str]: Sorted list of unique section numbers
+    """
+    # First, clean up the text to normalize some patterns
+    # Replace multiple dots with a single one
+    cleaned_text = re.sub(r"\.{2,}", ".", text)
+
+    # Core section number pattern: digits separated by periods
+    section_num_pattern = r"\d+(?:\.\d+)*"
+
+    # Combined pattern for different formats
+    patterns = [
+        # Format: "Section X.Y"
+        rf"Section\s+({section_num_pattern})",
+        # Format: "X.Y:" (with colon)
+        rf"(?:^|\n)\s*({section_num_pattern})\s*:",
+        # Format: Indented sections (may start with spaces)
+        rf'(?:^|\n)\s+({section_num_pattern})\s*[:."]',
+        # Format: "X.Y. Title" or "X.Y Title" at line start
+        rf"(?:^|\n)\s*({section_num_pattern})(?:\.|\s+)",
+    ]
+
+    # Combine all patterns with OR
+    combined_pattern = "|".join(patterns)
+
+    # Use a set to collect unique matches
+    section_set = set()
+
+    # Find all matches
+    for match in re.finditer(combined_pattern, cleaned_text):
+        # Process each capturing group
+        for group_idx in range(1, len(patterns) + 1):
+            if group_idx <= len(match.groups()) and match.group(group_idx):
+                # Clean up the section number (remove trailing dots and spaces)
+                section_num = match.group(group_idx).rstrip(". ")
+                section_set.add(section_num)
+                break
+
+    # Sort the section numbers numerically by each component
+    def section_sort_key(section):
+        return [int(n) for n in section.split(".")]
+
+    sorted_sections = sorted(section_set, key=section_sort_key)
+
+    return sorted_sections
+
+
+def transform_span_tags(text):
+    """
+    Transforms span tags with id="page-X-Y" format to <page_X> format.
+
+    Args:
+        text (str): The input text containing span tags
+
+    Returns:
+        str: Text with transformed span tags
+    """
+    # This regex pattern matches <span id="page-NUMBER-NUMBER"></span> and captures the first number
+    pattern = r'<span id="page-(\d+)-\d+"></span>'
+
+    # Replace with <page_NUMBER>
+    transformed_text = re.sub(pattern, r"<page_\1> ", text)
+
+    return transformed_text
+
+
+def retrieve_sections(
+    filename: str, vectordb_endpoint, sections: Optional[List[str]] = None, text: Optional[str] = None
+) -> List[str]:
+    """
+    Retrieve sections from a vector database in parallel.
+
+    Args:
+        filename: The name of the file to retrieve sections from
+        vectordb_endpoint: The endpoint for the vector database
+        sections: List of section identifiers to retrieve
+        text: Text to extract section numbers from if sections is None
+
+    Returns:
+        List of contents from the retrieved sections
+    """
+    if sections is None and text is None:
+        raise AssertionError("You should provide the text of the sections.")
+
+    if sections is None:
+        sections = extract_section_numbers(text)
+
+    sections = [sections] if isinstance(sections, str) else sections
+
+    # Define a worker function to process each section
+    def process_section(section):
+        try:
+            content = get_raw_section(section=section, filename=filename, vectordb_endopoint=vectordb_endpoint)
+            return [i["properties"]["text"] for i in content]
+        except:
+            return []
+
+    # Use ThreadPoolExecutor to parallelize the section retrieval
+    contents = []
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        # Submit all tasks and get future objects
+        future_to_section = {executor.submit(process_section, section): section for section in sections}
+
+        # Process results as they complete
+        for future in concurrent.futures.as_completed(future_to_section):
+            section_content = future.result()
+            contents.extend(section_content)
+
+    return list(set(contents))
+
+
+def tokenize_and_chunk(tokenizer, text, max_tokens=512, overlap_tokens=256):
+    """
+    Tokenizes the text and splits it into overlapping chunks if it exceeds the max_tokens limit.
+
+    :param text: The input text to tokenize and chunk.
+    :param max_tokens: The maximum number of tokens allowed per chunk.
+    :param overlap_tokens: The number of overlapping tokens between chunks.
+    :param tokenizer_name: The name of the tokenizer to use (e.g., "bert-base-uncased").
+    :return: A list of tokenized chunks.
+    """
+
+    # Tokenize the text
+    tokens = tokenizer.encode(text)
+
+    # Check if the text is already within the limit
+    if len(tokens) <= max_tokens:
+        return [text]
+
+    # Split the text into overlapping chunks
+    chunks = []
+    start = 0
+
+    while start < len(tokens):
+        end = start + max_tokens
+        chunk = tokens[start:end]
+        chunks.append(tokenizer.decode(chunk))
+        start += max_tokens - overlap_tokens  # Move the window forward, overlapping by `overlap_tokens`
+
+    return chunks
+
+
+def format_references(text):
+    """
+    A robust function that:
+    1. Identifies all references in the format [number](page_number)
+    2. Ensures each page consistently uses a single reference number
+    3. Reorganizes reference numbers to be sequential (no gaps)
+    4. Replaces each page_number with doc1.pdf#page-{page_number}
+
+    If the function encounters any errors, it will fall back to simply
+    replacing the page numbers with doc1.pdf#page-{page_number}.
+
+    Args:
+        text (str): The input text containing references
+
+    Returns:
+        str: Text with standardized, sequential references and replaced page links
+    """
+    try:
+        # Regular expression to find references in the format [number](page_number)
+        regex = r"\[(\d+)\]\((\d+)\)"
+
+        # Step 1: Find all unique reference numbers
+        all_refs = set()
+        for match in re.finditer(regex, text):
+            all_refs.add(int(match.group(1)))
+
+        # Step 2: Map pages to all their reference numbers and count occurrences
+        page_to_refs = defaultdict(list)
+        for match in re.finditer(regex, text):
+            ref_num = int(match.group(1))
+            page_num = match.group(2)
+            page_to_refs[page_num].append(ref_num)
+
+        # Step 3: Determine the canonical reference number for each page
+        # Use the most frequent reference, or the lowest if tied
+        canonical_refs = {}
+        for page_num, ref_nums in page_to_refs.items():
+            # Count the frequency of each reference number
+            ref_counts = {}
+            for ref in ref_nums:
+                ref_counts[ref] = ref_counts.get(ref, 0) + 1
+
+            # Find the most frequent references
+            max_count = max(ref_counts.values())
+            most_common_refs = [ref for ref, count in ref_counts.items() if count == max_count]
+
+            # Use the lowest number if there's a tie
+            canonical_refs[page_num] = min(most_common_refs)
+
+        # Step 4: Create a mapping of reference numbers to their new sequential numbers
+        unique_canonical_refs = sorted(set(canonical_refs.values()))
+        ref_to_new_ref = {old_ref: i + 1 for i, old_ref in enumerate(unique_canonical_refs)}
+
+        # Step 5: Create a mapping of all original references to their new format
+        replacements = {}
+        for match in re.finditer(regex, text):
+            original = match.group(0)
+            ref_num = int(match.group(1))
+            page_num = match.group(2)
+
+            # Get the canonical reference number for this page
+            canonical_ref = canonical_refs[page_num]
+
+            # Get the new sequential reference number
+            new_ref = ref_to_new_ref[canonical_ref]
+
+            # Create the replacement with the new sequential reference
+            replacement = f"[{new_ref}](doc1.pdf#page-{page_num})"
+            replacements[original] = replacement
+
+        # Step 6: Apply all replacements (from longest match to shortest to avoid partial matches)
+        result = text
+        for original, replacement in sorted(replacements.items(), key=lambda x: -len(x[0])):
+            result = result.replace(original, replacement)
+
+        # Generate a report of standardizations and sequencing made
+        ref_changes = defaultdict(set)
+        for page_num, ref_nums in page_to_refs.items():
+            canonical_ref = canonical_refs[page_num]
+            new_ref = ref_to_new_ref[canonical_ref]
+            for ref in set(ref_nums):
+                if ref != new_ref:
+                    ref_changes[ref].add(new_ref)
+
+        report_lines = []
+        for old_ref, new_refs in sorted(ref_changes.items()):
+            if len(new_refs) == 1:
+                new_ref = list(new_refs)[0]
+                report_lines.append(f"Reference [{old_ref}] changed to [{new_ref}]")
+
+        return result, "\n".join(report_lines)
+
+    except Exception as e:
+        # Fallback: just replace page numbers with doc1.pdf#page-{page_number}
+        fallback_result = re.sub(r"\[(\d+)\]\((\d+)\)", lambda m: f"[{m.group(1)}](doc1.pdf#page-{m.group(2)})", text)
+        return fallback_result, f"Error during reference standardization: {str(e)}. Applied simple page replacement."

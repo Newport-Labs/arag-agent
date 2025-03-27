@@ -1,25 +1,15 @@
 import concurrent.futures
-import json
 from typing import Any, Callable, List, Optional
 
 from openai import OpenAI
 
-from arag.arag_agents import (AnswerAgent, ConciseAnswerAgent,
-                              ContentReferencerAgent, DecisionAgent,
-                              EvaluatorAgent, ImageReferencerAgent,
-                              ImproverAgent, KnowledgeAgent,
-                              KnowledgeGapsAgent, MissingInfoAgent,
-                              ProcessAgent, QueryRewriterAgent)
-from arag.arag_agents.utils.memory_layer import AgentMemory
+from arag.arag_agents import (AnswerAgent, CitationAgent,
+                              DocumentSelectionAgent, ImageReferencerAgent,
+                              KnowledgeAgent, ProcessAgent, QueryRewriterAgent)
 from arag.prompts import PROMPTS
-from arag.utils.parse_utils import (process_content_references,
-                                    process_images_parallel)
-from arag.utils.text_utils import (align_text_images, convert_citations,
-                                   extract_section, fix_markdown_tables,
-                                   has_similar_vector,
-                                   perform_similarity_search,
-                                   remove_hash_lines, remove_reference_section,
-                                   remove_trailing_hashes)
+from arag.utils.text_utils import (align_text_images, fix_markdown_tables,
+                                   format_references)
+from arag.utils.vectordb_utils import _get_chunks, _get_metadata
 
 
 class ARag:
@@ -35,10 +25,8 @@ class ARag:
         self._vectordb_endpoint = vectordb_endopoint
         self.status_callback = status_callback
         self.user_id = user_id
-        self._evaluator_decision = False
-        self._evaluator_max_retry = 3
-        self.memory = AgentMemory()
-        self._retrieved_chunks_embeddings = []
+
+        self._retrieved_knowledge = []
 
         self._init_client(api_key=api_key)
         self._init_agents()
@@ -55,26 +43,14 @@ class ARag:
         )
 
     def _init_agents(self) -> None:
-        self.query_rewrite_agent = QueryRewriterAgent(
+        self.query_rewriter = QueryRewriterAgent(
             system_prompt=self.system_prompts["query_rewrite"],
             openai_client=self.openai_client,
             model=self.model,
         )
 
-        self.missing_info_agent = MissingInfoAgent(
-            system_prompt=self.system_prompts["missing_info"],
-            openai_client=self.openai_client,
-            model=self.model,
-        )
-
         self.knowledge_agent = KnowledgeAgent(
-            system_prompt=self.system_prompts["knowledge"],
-            openai_client=self.openai_client,
-            model=self.model,
-        )
-
-        self.decision_agent = DecisionAgent(
-            system_prompt=self.system_prompts["decision"],
+            system_prompt=self.system_prompts["knowledge_extractor"],
             openai_client=self.openai_client,
             model=self.model,
         )
@@ -85,299 +61,205 @@ class ARag:
             model=self.model,
         )
 
-        self.concise_answer_agent = ConciseAnswerAgent(
-            system_prompt=self.system_prompts["concise_answer"],
-            openai_client=self.openai_client,
-            model=self.model,
-        )
-
-        self.evaluator_agent = EvaluatorAgent(
-            system_prompt=self.system_prompts["evaluator"],
-            openai_client=self.openai_client,
-            model=self.model,
-        )
-
-        self.improver_agent = ImproverAgent(
-            system_prompt=self.system_prompts["improver"],
-            openai_client=self.openai_client,
-            model=self.model,
-        )
-
-        self.knowledge_gaps_agent = KnowledgeGapsAgent(
-            system_prompt=self.system_prompts["knowledge_gaps"],
-            openai_client=self.openai_client,
-            model=self.model,
-        )
-
         self.process_agent = ProcessAgent(
             system_prompt=self.system_prompts["process"],
             openai_client=self.openai_client,
             model=self.model,
         )
 
-        self.content_referencer_agent = ContentReferencerAgent(
-            system_prompt=self.system_prompts["content_referencer"],
+        self.citation_agent = CitationAgent(
+            system_prompt=self.system_prompts["citation_integrator"],
             openai_client=self.openai_client,
             model=self.model,
         )
 
         self.image_referencer_agent = ImageReferencerAgent(
-            system_prompt=self.system_prompts["image_referencer"],
+            system_prompt=self.system_prompts["images_integrator"],
             openai_client=self.openai_client,
             model=self.model,
         )
 
-    def _rewrite_queries(self, query: str) -> str:
-        self._update_status(
-            "action-rewrite",
-            self.process_agent.perform_action(query=query, action="query_rewrite")
-        )
-        rewritten_queries = self.query_rewrite_agent.perform_action(query=query)
-        self._update_status(
-            "action-rewrite",
-            self.process_agent.perform_action(query=query, action="query_rewrite_successful", outcome=rewritten_queries[:-1])
+        self.document_selection_agent = DocumentSelectionAgent(
+            system_prompt=self.system_prompts["document_selection"],
+            openai_client=self.openai_client,
+            model=self.model,
         )
 
-        return rewritten_queries
+    def _extract_knowledge(self, chunk, query, knowledge_agent):
+        """Extract knowledge from a single chunk."""
 
-    def _retrieve_chunks(self, queries: List[str], num_chunks: Optional[int] = 1) -> List[str]:
-        self._update_status(
-            "action-retrieve",
-            self.process_agent.perform_action(query=queries, action="retrieve_information")
-        )
-
-        chunks, chunks_embedding = perform_similarity_search(
-            vectordb_endopoint=self._vectordb_endpoint, queries=queries, threshold=1.0, num_chunks=num_chunks
-        )
-
-        self._update_status(
-            "action-retrieve",
-            self.process_agent.perform_action(query=queries, action="retrieve_information_successful", outcome=f"{len(chunks)} chunks found")
-        )
-
-        if len(self._retrieved_chunks_embeddings) == 0:
-            self._retrieved_chunks_embeddings = chunks_embedding
-
-            return chunks
-        else:
-            new_chunks = []
-
-            for chunk, chunk_embedding in zip(chunks, chunks_embedding):
-                if has_similar_vector(chunk_embedding, self._retrieved_chunks_embeddings, threshold=1.0):
-                    continue
-
-                self._retrieved_chunks_embeddings.append(chunk_embedding)
-                new_chunks.append(chunk)
-
-            return new_chunks
-
-    def _fill_missing_sections(self, query: str, chunk: List[str]) -> bool:
-        self._update_status(
-            "action-missing-info",
-            self.process_agent.perform_action(query=query, action="finding_missing_information")
-        )
-
-        missing_sections = self.missing_info_agent.perform_action(query=query, chunk=chunk)
-        missing_sections = [
-            (m.referenced_section, extract_section(m.referenced_section), m.extraction_query) for m in missing_sections
-        ]
-
-        # Check if there are any missing sections to process
-        if len(missing_sections) == 0:
-            return False
-
-        self._update_status(
-            "action-missing-info",
-            self.process_agent.perform_action(query=query, action="finding_missing_information_successful", outcome=missing_sections)
-        )
-
-        def process_missing_section(section_data):
-            exact_section, section, section_query = section_data
-            # Get the enriched chunk
-            try:
-                enriched_chunks, _ = perform_similarity_search(
-                    vectordb_endopoint=self._vectordb_endpoint,
-                    queries=[section_query],
-                    threshold=1.0,
-                    section=section,
-                    num_chunks=2,
-                )
-
-                enriched_chunks = [
-                    f"Section {exact_section} - {section_query}\n\n" + enriched_chunk
-                    for enriched_chunk in enriched_chunks
-                ]
-
-                self._knowledge(query=section_query, chunks=enriched_chunks)
-            except Exception as e:
-                pass
-
-        # Process all missing sections in parallel
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = [executor.submit(process_missing_section, section_data) for section_data in missing_sections]
-
-            # Wait for all futures to complete
-            _ = [future.result() for future in concurrent.futures.as_completed(futures)]
-
-        # Return True because we had missing sections to process
-        return True
-
-    def _knowledge(self, query: str, chunks: List[str]) -> None:
-        def process_chunk(chunk):
-            return self.knowledge_agent.perform_action(query=query, chunk=chunk)
-
-        # Process all chunks in parallel
-        extracted_knowledge = []
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = [executor.submit(process_chunk, chunk) for chunk in chunks]
-            results = [future.result() for future in concurrent.futures.as_completed(futures)]
-
-        # Flatten the list of lists into a single list
-        for knowledge_items in results:
-            extracted_knowledge.append(knowledge_items)
-
-        self.memory.update(extracted_knowledge)
-
-    def _decision(self, query: str) -> str:
-        knowledge = self.memory.retrieve()
-
-        decision = self.decision_agent.perform_action(query=query, knowledge=knowledge)
-
-        if decision == "answer":
-            self._update_status(
-                "action-decision",
-                self.process_agent.perform_action(query=query, action="answer_decision_successful", outcome=decision)
-            )
-        else:
-            self._update_status(
-                "action-decision",
-                self.process_agent.perform_action(query=query, action="answer_decision_unsuccessful_info_needed", outcome=decision)
-            )
-
-        return decision
-
-    def answer_loop(self, query: str):
-        knowledge = self.memory.retrieve()
-        draft_answer = self._answer(query=query, knowledge=knowledge)
-        knowledge_added = self._fill_missing_sections(query=query, chunk=draft_answer)
-
-        if knowledge_added:
-            self._update_status(
-                "action-answer",
-                self.process_agent.perform_action(query=query, action=f"answer_with_newly_added_missing_information")
-            )
-            knowledge = self.memory.retrieve()
-            answer = self._answer(query=query, knowledge=knowledge)
-        else:
-            answer = draft_answer
-
-        current_idx = 0
-
-        while not self._evaluator_decision and current_idx < self._evaluator_max_retry:
-            self._update_status(
-                "action-evaluate",
-                self.process_agent.perform_action(query=answer, action=f"evaluate_answer_iteration_{current_idx + 1}")
-            )
-            evaluation = self.evaluator_agent.perform_action(query=query, knowledge=knowledge, answer=answer)
-            self._update_status(
-                "action-evaluate",
-                self.process_agent.perform_action(query=answer, action=f"evaluate_answer_successful_iteration_{current_idx + 1}", outcome=evaluation)
-            )
-
-            if json.loads(evaluation)["approval"] == "yes":
-                break
-
-            self._update_status(
-                "action-improve",
-                self.process_agent.perform_action(query=evaluation, action=f"improve_answer_iteration_{current_idx + 1}")
-            )
-            answer = self.improver_agent.perform_action(
-                query=query, answer=answer, evaluation=evaluation, knowledge=knowledge
-            )
-            self._update_status(
-                "action-improve",
-                self.process_agent.perform_action(query=evaluation, action=f"improve_answer_successful_iteration_{current_idx + 1}", outcome=answer)
-            )
-
-            current_idx += 1
-
-        answer = convert_citations(answer)
-        answer = process_content_references(
-            answer=answer,
-            knowledge=self.memory._memories,
-            fact_checker=self.content_referencer_agent
-        )
-        answer = process_images_parallel(
-            answer=answer,
-            knowledge=self.memory._memories,
-            image_extractor=self.image_referencer_agent
-        )
-
-        return remove_trailing_hashes(align_text_images(answer)).strip()
-
-    def _fill_knowledge_gaps(
-        self,
-        query: str,
-    ) -> None:
-        knowledge = self.memory.retrieve()
-
-        self._update_status(
-            "action-knowledge-gaps",
-            self.process_agent.perform_action(query=query, action="knowledge_gaps_filling")
-        )
-        queries, _ = self.knowledge_gaps_agent.perform_action(query=query, knowledge=knowledge)
-        self._update_status(
-            "action-knowledge-gaps",
-            self.process_agent.perform_action(query=query, action="knowledge_gaps_filling_successful", outcome=queries)
-        )
-
-        def process_single_query(new_query):
-            rewritten_query = self._rewrite_queries(query=new_query)
-            chunks = self._retrieve_chunks(queries=rewritten_query, num_chunks=1)
-
-            return self._knowledge(query=new_query, chunks=chunks)
-
-        # Run all queries in parallel
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = [executor.submit(process_single_query, new_query) for new_query in queries]
-
-            # Wait for all futures to complete
-            _ = [future.result() for future in concurrent.futures.as_completed(futures)]
-
-    def _answer(self, query: str, knowledge: str) -> str:
         try:
-            answer = fix_markdown_tables(self.answer_agent.perform_action(query=query, knowledge=knowledge))
-        except Exception as e:
-            self._update_status(
-                "action-concise-answer",
-                self.process_agent.perform_action(query=query, action="answer_failed_too_long_try_concise")
-            )
-            answer = fix_markdown_tables(self.concise_answer_agent.perform_action(query=query, knowledge=knowledge))
+            return knowledge_agent.perform_action(query=query, document_chunk=chunk)
+        except:
+            return chunk
 
-        return remove_hash_lines(remove_reference_section(answer)).strip()
+    def extract_knowledge(self, output_chunks: List[Any], query, knowledge_agent, max_workers=None):
+        """
+        Extract knowledge from chunks in parallel
+
+        Args:
+            output_chunks: List of text chunks to process
+            query: Query to use for knowledge extraction
+            knowledge_agent: Agent that extracts knowledge
+            max_workers: Maximum number of worker threads for chunk processing
+
+        Returns:
+            List of extracted knowledge chunks
+        """
+        extracted_knowledge = []
+
+        # Use ThreadPoolExecutor for chunk processing
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit extraction tasks for each chunk
+            future_to_chunk = {
+                executor.submit(self._extract_knowledge, chunk, query, knowledge_agent): i
+                for i, chunk in enumerate(output_chunks)
+            }
+
+            # Collect results as they complete (maintains original order)
+            for future in concurrent.futures.as_completed(future_to_chunk):
+                chunk_idx = future_to_chunk[future]
+                try:
+                    result = future.result()
+                    # Ensure we maintain the original order
+                    while len(extracted_knowledge) <= chunk_idx:
+                        extracted_knowledge.append(None)
+                    extracted_knowledge[chunk_idx] = result
+                except Exception as exc:
+                    print(f"Chunk {chunk_idx} generated an exception: {exc}")
+
+        # Remove any None values (in case some chunks failed)
+        extracted_knowledge = [k for k in extracted_knowledge if k is not None]
+        extracted_knowledge = [k.strip() for k in extracted_knowledge if k != ""]
+
+        return extracted_knowledge
+
+    def _retrieve_chunks(self, prompt, filename, num_chunks):
+        chunks = _get_chunks(
+            vectordb_endopoint=self._vectordb_endpoint, query=prompt, filename=filename, num_chunks=num_chunks
+        )
+        return chunks["chunks"]
+
+    def retrieve_chunks(self, prompts, filename, num_chunks):
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            # Create a list of futures
+            future_to_prompt = {
+                executor.submit(self._retrieve_chunks, prompt, filename, num_chunks): prompt for prompt in prompts
+            }
+
+            # Collect results as they complete
+            all_chunks = []
+            for future in concurrent.futures.as_completed(future_to_prompt):
+                chunks = future.result()
+                all_chunks.extend(chunks)
+
+        # Remove duplicates
+        return list(set(all_chunks))
 
     def search(self, query: str) -> str:
-        # For the moment, we clear the agent memory at the beggining of each asnwer.
-        self.memory.reset()
+        # Add initialization action
+        self._update_status(
+            "action-initialize", self.process_agent.perform_action(query=query, action="initialize_search")
+        )
 
-        # Step 1: Rewrite query
-        rewritten_queries = self._rewrite_queries(query=query)
+        # Continue with extract metadata
+        self._update_status(
+            "action-extract-metadata", self.process_agent.perform_action(query=query, action="extract_metadata")
+        )
 
-        # Step 2: Retrieve relevant chunks
-        chunks = self._retrieve_chunks(queries=rewritten_queries, num_chunks=3)
+        metadata = _get_metadata(self._vectordb_endpoint)
 
-        # Step 3: Now, form knowledge/facts from retrieved chunks
+        # Add status update for document selection
+        self._update_status(
+            "action-document-selection", self.process_agent.perform_action(query=query, action="document_selection")
+        )
+        chosen_file = self.document_selection_agent.perform_action(query=query, files_metadata=metadata)
+        self._update_status(
+            "action-document-selection",
+            self.process_agent.perform_action(query=query, action="document_selection_successful", outcome=chosen_file),
+        )
+
+        for m in metadata:
+            if m["filename"] == chosen_file:
+                chosen_metadata = m
+                break
+
+        # Add status update for query rewriting
+        self._update_status("action-rewrite", self.process_agent.perform_action(query=query, action="query_rewrite"))
+        rewritten_prompts = self.query_rewriter.perform_action(
+            query=query, summary=chosen_metadata["summary"], table_of_contents=str(chosen_metadata["table_of_contents"])
+        )
+        self._update_status(
+            "action-rewrite",
+            self.process_agent.perform_action(
+                query=query, action="query_rewrite_successful", outcome=rewritten_prompts
+            ),
+        )
+
+        # Add status update for chunk retrieval
+        self._update_status(
+            "action-retrieve", self.process_agent.perform_action(query=query, action="retrieve_information")
+        )
+        retrieved_chunks = self.retrieve_chunks(prompts=rewritten_prompts, filename=chosen_file, num_chunks=3)
+        self._update_status(
+            "action-retrieve",
+            self.process_agent.perform_action(
+                query=query, action="retrieve_information_successful", outcome=f"{len(retrieved_chunks)} chunks found"
+            ),
+        )
+
+        # Add status update for knowledge extraction
         self._update_status(
             "action-info-extraction",
-            self.process_agent.perform_action(query=f"{len(chunks)} chunks found", action="information_extraction")
+            self.process_agent.perform_action(
+                query=f"{len(retrieved_chunks)} chunks found", action="information_extraction"
+            ),
         )
-        self._knowledge(query=query, chunks=chunks)
+        extracted_knowledge = self.extract_knowledge(
+            output_chunks=retrieved_chunks, query=query, knowledge_agent=self.knowledge_agent, max_workers=4
+        )
+        self._update_status(
+            "action-info-extraction",
+            self.process_agent.perform_action(
+                query=query,
+                action="information_extraction_successful",
+                outcome=f"{len(extracted_knowledge)} pieces of knowledge extracted",
+            ),
+        )
 
-        # Step 4: Decide to enrich or to respond
-        decision = self._decision(query=query)
+        # Add status update for answer generation
+        self._update_status("action-answer", self.process_agent.perform_action(query=query, action="generating_answer"))
+        draft_answer = self.answer_agent.perform_action(query=query, document_chunks=extracted_knowledge)
+        _answer = draft_answer
+        self._update_status(
+            "action-answer", self.process_agent.perform_action(query=query, action="generating_answer_successful")
+        )
 
-        if decision == "answer":
-            return self.answer_loop(query=query)
+        # Add status update for image referencing
+        self._update_status(
+            "action-image-reference", self.process_agent.perform_action(query=query, action="integrating_images")
+        )
+        for knowledge in extracted_knowledge:
+            a = self.image_referencer_agent.perform_action(answer=_answer, section=knowledge)
 
-        # Provide the final answer. This can be a while loop, but due to budget constrains, it's fine how it is now.
-        return self.answer_loop(query=query)
+            if a != "":
+                _answer = a
+        self._update_status(
+            "action-image-reference",
+            self.process_agent.perform_action(query=query, action="integrating_images_successful"),
+        )
+
+        # Add status update for citation
+        self._update_status(
+            "action-citation", self.process_agent.perform_action(query=query, action="adding_citations")
+        )
+        citation_knowledge = "\n\n".join(extracted_knowledge)
+        answer = self.citation_agent.perform_action(answer=_answer, section=citation_knowledge)
+        self._update_status(
+            "action-citation", self.process_agent.perform_action(query=query, action="adding_citations_successful")
+        )
+
+        answer = fix_markdown_tables(align_text_images(answer))
+        answer, _ = format_references(answer)
+
+        return answer
