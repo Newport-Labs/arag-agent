@@ -262,4 +262,4 @@ class ARag:
         answer = fix_markdown_tables(align_text_images(answer))
         answer, _ = format_references(answer)
 
-        return answer
+        return answer.strip()
