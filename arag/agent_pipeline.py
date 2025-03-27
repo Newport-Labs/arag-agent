@@ -317,6 +317,6 @@ class ARag:
             "action-citation",
             self.process_agent.perform_action(query=query, action="adding_citations_successful"),
         )
-        final_answer, _ = format_references(final_answer)
+        final_answer = format_references(final_answer)
 
         return final_answer
