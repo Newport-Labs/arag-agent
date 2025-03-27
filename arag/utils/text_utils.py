@@ -196,10 +196,10 @@ def format_references(text):
     1. Identifies all references in the format [number](page_number)
     2. Ensures each page consistently uses a single reference number
     3. Reorganizes reference numbers to be sequential (no gaps)
-    4. Replaces each page_number with doc1.pdf#page-{page_number}
+    4. Replaces each page_number with doc1.pdf#page={page_number}
 
     If the function encounters any errors, it will fall back to simply
-    replacing the page numbers with doc1.pdf#page-{page_number}.
+    replacing the page numbers with doc1.pdf#page={page_number}.
 
     Args:
         text (str): The input text containing references
@@ -257,7 +257,7 @@ def format_references(text):
             new_ref = ref_to_new_ref[canonical_ref]
 
             # Create the replacement with the new sequential reference
-            replacement = f"[{new_ref}](doc1.pdf#page-{page_num})"
+            replacement = f"[{new_ref}](doc1.pdf#page={page_num})"
             replacements[original] = replacement
 
         # Step 6: Apply all replacements (from longest match to shortest to avoid partial matches)
@@ -283,6 +283,6 @@ def format_references(text):
         return result, "\n".join(report_lines)
 
     except Exception as e:
-        # Fallback: just replace page numbers with doc1.pdf#page-{page_number}
-        fallback_result = re.sub(r"\[(\d+)\]\((\d+)\)", lambda m: f"[{m.group(1)}](doc1.pdf#page-{m.group(2)})", text)
+        # Fallback: just replace page numbers with doc1.pdf#page={page_number}
+        fallback_result = re.sub(r"\[(\d+)\]\((\d+)\)", lambda m: f"[{m.group(1)}](doc1.pdf#page={m.group(2)})", text)
         return fallback_result, f"Error during reference standardization: {str(e)}. Applied simple page replacement."
