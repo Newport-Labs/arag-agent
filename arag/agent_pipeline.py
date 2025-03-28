@@ -245,13 +245,13 @@ class ARag:
                 ),
             )
 
+            if improvement_decision:
+                break
+
             # Add status update for improvement
             answer = self.improver_agent.perform_action(
                 query=query, original_answer=answer, knowledge_chunks=merged_knowledge, feedback=feedback
             )
-
-            if improvement_decision and _loop_count != 0:
-                break
 
             self._update_status(
                 "action-improve",
