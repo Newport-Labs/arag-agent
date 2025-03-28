@@ -228,8 +228,6 @@ class ARag:
         self._update_status(
             "action-answer", self.process_agent.perform_action(query=query, action="generating_answer_successful")
         )
-        answer = self.image_referencer_agent.perform_action(answer=answer, section=merged_knowledge)
-        answer = fix_markdown_tables(align_text_images(answer))
 
         _loop_count = 0
 
@@ -247,18 +245,14 @@ class ARag:
                 ),
             )
 
-            print(feedback)
-
-            if improvement_decision:
-                break
-
             # Add status update for improvement
             answer = self.improver_agent.perform_action(
                 query=query, original_answer=answer, knowledge_chunks=merged_knowledge, feedback=feedback
             )
-            print(answer)
-            print("-" * 50)
-            
+
+            if improvement_decision and _loop_count != 0:
+                break
+
             self._update_status(
                 "action-improve",
                 self.process_agent.perform_action(
@@ -268,6 +262,9 @@ class ARag:
                 ),
             )
             _loop_count += 1
+
+        answer = self.image_referencer_agent.perform_action(answer=answer, section=merged_knowledge)
+        answer = fix_markdown_tables(align_text_images(answer))
 
         return format_references(process_citations(answer=answer,
                                                    text_chunks=merged_knowledge,
