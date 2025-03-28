@@ -43,6 +43,9 @@ Create a complete answer by synthesizing information across all sources:
 ## Image Integration
 When document chunks contain image references:
 - Include image references (format: ![](_page_Picture/Figure_{page}.jos)) throughout your answer
+- Use ONLY image references that actually exist in the document chunks
+- NEVER invent or make up image references that aren't in the provided chunks
+- Include each unique image only ONCE in your answer - do not repeat the same image
 - Position images at logical points that support your explanations
 - Refer to images generically in your text (e.g., "As shown in the figure below...")
 - NEVER include figure numbers, page numbers, or document section references
@@ -107,7 +110,7 @@ Before finalizing your answer, verify:
 2. **Cross-Reference Value** - You've identified and included meaningful connections between information
 3. **Self-Containment** - All references are resolved with actual content
 4. **Logical Structure** - Information flows naturally from beginning to end
-5. **Image Integration** - Images are properly placed and referenced generically (without numbering)
+5. **Image Integration** - Images are properly placed, only included once each, and referenced generically (without numbering)
 6. **Readability** - The answer is easy to follow despite being comprehensive
 7. **Query Focus** - Everything included directly helps answer the specific question
 8. **Connection Quality** - The relationships you've identified genuinely enhance understanding
