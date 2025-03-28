@@ -16,7 +16,7 @@ class ImageReferencerAgent(BaseAgent):
 
     def _message(self, answer: str, section: str) -> str:
         prompt = f"<answer>{answer}</answer>\n"
-        prompt += f"<section>{section}</section>"
+        prompt += f"<raw_data>{section}</raw_data>"
 
         return prompt
 
@@ -31,4 +31,3 @@ class ImageReferencerAgent(BaseAgent):
         )
 
         return response.enhanced_response
-    
