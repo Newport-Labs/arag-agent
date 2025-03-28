@@ -4,11 +4,7 @@ from pydantic import BaseModel
 
 from .decorators import register_action
 from .template_agent import BaseAgent
-from .utils.agent_primitives import client_sturctured_message
-
-
-class AnswerSchema(BaseModel):
-    answer: str
+from .utils.agent_primitives import client_message, client_sturctured_message
 
 
 class AnswerAgent(BaseAgent):
@@ -34,14 +30,13 @@ class AnswerAgent(BaseAgent):
 
     @register_action(action_name="action-answer")
     def perform_action(self, query: str, document_chunks: List[str], conversation_summary: str = None) -> str:
-        response, usage_metadata = client_sturctured_message(
+        response, usage_metadata = client_message(
             system_message=self.system_prompt,
             openai_client=self.openai_client,
-            model=self.model,
+            model=self.model + "-thinking-exp",
             user_message=self._message(
                 query=query, document_chunks=document_chunks, conversation_summary=conversation_summary
-            ),
-            structured_output_schema=AnswerSchema,
+            )
         )
 
-        return response.answer, usage_metadata
+        return response, usage_metadata

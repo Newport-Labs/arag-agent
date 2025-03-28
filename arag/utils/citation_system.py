@@ -140,7 +140,7 @@ def add_citations(answer_segments: List[str], page_boundaries: dict, threshold: 
 
         citation = section[1]
         citation_index = np.argwhere(unique_indexes == citation).item()
-        s = section[0] + f" [{citation_index}]({citation})"
+        s = section[0] + f" [{citation_index + 1}]({citation})"
 
         full_text += s + "\n\n"
 
