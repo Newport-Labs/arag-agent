@@ -263,8 +263,14 @@ class ARag:
             )
             _loop_count += 1
 
-        answer = self.image_referencer_agent.perform_action(answer=answer, section=merged_knowledge)
-        answer = fix_markdown_tables(align_text_images(answer))
+        _answer = answer
+
+        for knowledge in extracted_knowledge:
+            a = self.image_referencer_agent.perform_action(answer=_answer, section=knowledge)
+
+            if a != "":
+                _answer = a
+        answer = fix_markdown_tables(align_text_images(_answer))
 
         return format_references(process_citations(answer=answer,
                                                    text_chunks=merged_knowledge,

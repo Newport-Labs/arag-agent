@@ -2,7 +2,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="arag",
-    version="0.6.9.2",
+    version="0.6.9.3",
     packages=find_packages(),
     install_requires=[
         "openai",
