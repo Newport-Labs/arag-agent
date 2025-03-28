@@ -171,7 +171,7 @@ class ARag:
         # Create a list of tasks, each with its own argument
         tasks = []
         for query in search_queries:
-            tasks.append((query, chosen_metadata["filename"], 5, section, extracted_knowledge))
+            tasks.append((query, chosen_metadata["filename"], 3, section, extracted_knowledge))
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
             chunks_results = list(executor.map(lambda args: self._get_chunks_for_query(*args), tasks))

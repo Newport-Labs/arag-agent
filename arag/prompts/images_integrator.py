@@ -1,7 +1,5 @@
-IMAGE_INTEGRATOR = """# Prompt for Direct Image Integration from Text Chunks
+IMAGE_INTEGRATOR = """You are given two inputs: 
 
-## Task Definition
-You are given two inputs: 
 1. A formatted answer about a maintenance procedure
 2. Original text chunks containing image references in the format `![](_page_X_Picture_Y.jpeg)`
 
@@ -29,6 +27,12 @@ Your task is to insert the exact image references from the original text chunks 
    - Place each image immediately before the step it illustrates
    - Do not add extra formatting around the images
 
+5. **Preserve image-specific references**:
+   - Check if the original text chunks contain bold references to numbered items in the images (e.g., **1**, **2**, **3**)
+   - If the corresponding step in the answer is missing these references, update the answer to include them
+   - Example: If the chunk says "Remove the transmission dipstick (**1**)" but the answer only says "Remove the transmission dipstick", update it to "Remove the transmission dipstick (**1**)"
+   - Only do this for numbered references that specifically relate to components shown in the images
+
 ## Example
 
 ### Original answer text:
@@ -47,7 +51,7 @@ Your task is to insert the exact image references from the original text chunks 
 ### Expected enhanced output:
 ```
 ![](_page_179_Figure_21.jpeg)
-15. Remove the transmission dipstick and check the oil level. The cold oil level after 2-3 minutes of idle must be above the HOT MIN line on the dipstick.
+15. Remove the transmission dipstick (**1**) and check the oil level. The cold oil level after 2-3 minutes of idle must be above the HOT MIN line on the dipstick.
 16. If the oil is low, add oil as required.
 ```
 
@@ -64,4 +68,4 @@ Your task is to insert the exact image references from the original text chunks 
 </raw_data>
 
 ## Expected Output
-Provide the enhanced answer with images interleaved exactly at their appropriate locations, using the exact image references from the text chunks."""
+Provide the enhanced answer with images interleaved exactly at their appropriate locations, using the exact image references from the text chunks. Also ensure that any bold-formatted image component references (like **1**, **2**) from the original text chunks are included in the corresponding steps of the answer."""
