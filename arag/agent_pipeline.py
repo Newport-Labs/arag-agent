@@ -415,4 +415,4 @@ class ARag:
         # except Exception as e:
         #     pass
 
-        return answer
+        return align_text_images(answer)
