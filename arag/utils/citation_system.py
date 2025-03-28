@@ -118,14 +118,14 @@ def add_citations(answer_segments: List[str], page_boundaries: dict, threshold: 
 
     unique_indexes = []
 
-    for s in updated_sections[1:]:
+    for s in updated_sections[1:-1]:
         if not s[0].endswith(":") and not s[0].startswith("#") and not "![]" in s[0] and not s[0].endswith("**"):
             unique_indexes.append(s[1])
 
     unique_indexes = np.unique(unique_indexes)
     full_text = ""
 
-    for idx, section in enumerate(updated_sections):
+    for idx, section in enumerate(updated_sections[:-1]):
         if (
             idx == 0
             or section[0].endswith(":")

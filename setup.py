@@ -2,7 +2,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="arag",
-    version="0.6.2",
+    version="0.6.3",
     packages=find_packages(),
     install_requires=[
         "openai",
@@ -11,8 +11,7 @@ setup(
         "scikit-learn",
         "tiktoken",
         "pyyaml",
-        "requests",
-        "nltk"
+        "requests"
     ],
     author="newport solutions",
     author_email="contact@newport.ro",
