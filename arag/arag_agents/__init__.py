@@ -4,5 +4,6 @@ from .evaluator_agent import EvaluatorAgent
 from .image_referencer_agent import ImageReferencerAgent
 from .improver_agent import ImproverAgent
 from .knowledge_agent import KnowledgeAgent
+from .missing_info_agent import MissingInfoAgent
 from .process_agent import ProcessAgent
 from .query_rewrite_agent import QueryRewriterAgent
