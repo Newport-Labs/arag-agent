@@ -224,20 +224,12 @@ class ARag:
         merged_knowledge = "\n".join(extracted_knowledge)
 
         # Add status update for answer generation
-        draft_answer = self.answer_agent.perform_action(query=query, document_chunks=extracted_knowledge)
+        answer = self.answer_agent.perform_action(query=query, document_chunks=extracted_knowledge)
         self._update_status(
             "action-answer", self.process_agent.perform_action(query=query, action="generating_answer_successful")
         )
-
-        # Add status update for image referencing
-        _answer = draft_answer
-        for knowledge in extracted_knowledge:
-            a = self.image_referencer_agent.perform_action(answer=_answer, section=knowledge)
-
-            if a != "":
-                _answer = a
-
-        answer = fix_markdown_tables(align_text_images(_answer))
+        answer = self.image_referencer_agent.perform_action(answer=answer, section=merged_knowledge)
+        answer = fix_markdown_tables(align_text_images(answer))
 
         _loop_count = 0
 
