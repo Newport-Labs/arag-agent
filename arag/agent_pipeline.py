@@ -408,15 +408,11 @@ class ARag:
             _loop_count += 1
 
         # Format citations
-        try:
-            answer = format_references(
-                process_citations(answer=answer, text_chunks=merged_knowledge, threshold=0.6)
-            ).strip()
-        except Exception as e:
-            pass
-
-        # Add image references
-        answer = self.image_referencer_agent.perform_action(answer=answer, section=merged_knowledge)
-        answer = fix_markdown_tables(align_text_images(answer))
+        # try:
+        #     answer = format_references(
+        #         process_citations(answer=answer, text_chunks=merged_knowledge, threshold=0.6)
+        #     ).strip()
+        # except Exception as e:
+        #     pass
 
         return answer
