@@ -8,7 +8,7 @@ from arag.arag_agents import (AnswerAgent, DocumentSelectionAgent,
                               ImproverAgent, KnowledgeAgent, ProcessAgent,
                               QueryRewriterAgent)
 from arag.prompts import PROMPTS
-from arag.utils.citation_system import CitationSystem
+from arag.utils.citation_system import process_citations
 from arag.utils.text_utils import (align_text_images, fix_markdown_tables,
                                    format_references)
 from arag.utils.vectordb_utils import _get_chunks, _get_metadata
@@ -27,7 +27,6 @@ class ARag:
         self._vectordb_endpoint = vectordb_endopoint
         self.status_callback = status_callback
         self.user_id = user_id
-        self.citation_system = CitationSystem()
 
         self._retrieved_knowledge = []
 
@@ -178,10 +177,6 @@ class ARag:
 
         metadata = _get_metadata(self._vectordb_endpoint)
 
-        # Add status update for document selection
-        self._update_status(
-            "action-document-selection", self.process_agent.perform_action(query=query, action="document_selection")
-        )
         chosen_file = self.document_selection_agent.perform_action(query=query, files_metadata=metadata)
         self._update_status(
             "action-document-selection",
@@ -194,7 +189,6 @@ class ARag:
                 break
 
         # Add status update for query rewriting
-        self._update_status("action-rewrite", self.process_agent.perform_action(query=query, action="query_rewrite"))
         rewritten_prompts = self.query_rewriter.perform_action(
             query=query, summary=chosen_metadata["summary"], table_of_contents=str(chosen_metadata["table_of_contents"])
         )
@@ -206,9 +200,6 @@ class ARag:
         )
 
         # Add status update for chunk retrieval
-        self._update_status(
-            "action-retrieve", self.process_agent.perform_action(query=query, action="retrieve_information")
-        )
         retrieved_chunks = self.retrieve_chunks(prompts=rewritten_prompts, filename=chosen_file, num_chunks=3)
         self._update_status(
             "action-retrieve",
@@ -218,12 +209,6 @@ class ARag:
         )
 
         # Add status update for knowledge extraction
-        self._update_status(
-            "action-info-extraction",
-            self.process_agent.perform_action(
-                query=f"{len(retrieved_chunks)} chunks found", action="information_extraction"
-            ),
-        )
         extracted_knowledge = self.extract_knowledge(
             output_chunks=retrieved_chunks, query=query, knowledge_agent=self.knowledge_agent, max_workers=4
         )
@@ -239,7 +224,6 @@ class ARag:
         merged_knowledge = "\n".join(extracted_knowledge)
 
         # Add status update for answer generation
-        self._update_status("action-answer", self.process_agent.perform_action(query=query, action="generating_answer"))
         draft_answer = self.answer_agent.perform_action(query=query, document_chunks=extracted_knowledge)
         self._update_status(
             "action-answer", self.process_agent.perform_action(query=query, action="generating_answer_successful")
@@ -249,11 +233,6 @@ class ARag:
 
         # Add evaluation and improvement loop
         while _loop_count <= 3:
-            # Add status update for evaluation
-            self._update_status(
-                "action-evaluate", 
-                self.process_agent.perform_action(query=query, action=f"evaluate_answer_iteration_{_loop_count + 1}")
-            )
             improvement_decision, feedback = self.evaluator_agent.perform_action(
                 query=query, knowledge_chunks=merged_knowledge, answer=draft_answer
             )
@@ -270,10 +249,6 @@ class ARag:
                 break
 
             # Add status update for improvement
-            self._update_status(
-                "action-improve", 
-                self.process_agent.perform_action(query=query, action=f"improve_answer_iteration_{_loop_count + 1}")
-            )
             draft_answer = self.improver_agent.perform_action(
                 query=query, original_answer=draft_answer, knowledge_chunks=merged_knowledge, feedback=feedback
             )
@@ -285,15 +260,12 @@ class ARag:
                     outcome="Answer improved based on feedback"
                 ),
             )
-            
+
             _loop_count += 1
 
         _answer = draft_answer
 
         # Add status update for image referencing
-        self._update_status(
-            "action-image-reference", self.process_agent.perform_action(query=query, action="integrating_images")
-        )
         for knowledge in extracted_knowledge:
             a = self.image_referencer_agent.perform_action(answer=_answer, section=knowledge)
 
@@ -304,19 +276,8 @@ class ARag:
             self.process_agent.perform_action(query=query, action="integrating_images_successful"),
         )
 
-        # Add status update for citation
-        self._update_status(
-            "action-citation", self.process_agent.perform_action(query=query, action="adding_citations")
-        )
         answer = fix_markdown_tables(align_text_images(_answer))
 
-        final_answer = self.citation_system.process_citations(answer=answer,
-                                                              chunks_text=merged_knowledge,
-                                                              threshold=0.3)
-        self._update_status(
-            "action-citation",
-            self.process_agent.perform_action(query=query, action="adding_citations_successful"),
-        )
-        final_answer = format_references(final_answer)
-
-        return final_answer
+        return format_references(process_citations(answer=answer,
+                                                   text_chunks=merged_knowledge,
+                                                   threshold=0.5))

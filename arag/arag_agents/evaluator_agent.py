@@ -19,7 +19,7 @@ class EvaluatorAgent(BaseAgent):
     def _message(self, query: str, knowledge_chunks: str, answer: str) -> str:
         prompt = f"<query>{query}</query>\n"
         prompt += f"<knowledge_chunks>{knowledge_chunks}</knowledge_chunks>\n"
-        prompt += f"<answer>{answer}</answer>\n"
+        prompt += f"<answer>{answer}</answer>"
 
         return prompt
 
