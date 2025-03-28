@@ -230,6 +230,7 @@ class ARag:
         )
         answer = self.image_referencer_agent.perform_action(answer=answer, section=merged_knowledge)
         answer = fix_markdown_tables(align_text_images(answer))
+        print(answer)
 
         _loop_count = 0
 
@@ -254,6 +255,7 @@ class ARag:
             answer = self.improver_agent.perform_action(
                 query=query, original_answer=answer, knowledge_chunks=merged_knowledge, feedback=feedback
             )
+            
             self._update_status(
                 "action-improve",
                 self.process_agent.perform_action(
