@@ -229,6 +229,18 @@ class ARag:
             "action-answer", self.process_agent.perform_action(query=query, action="generating_answer_successful")
         )
 
+        _answer = answer
+
+        for knowledge in extracted_knowledge:
+            a = self.image_referencer_agent.perform_action(answer=_answer, section=knowledge)
+
+            if a != "":
+                _answer = a
+
+        print(_answer)
+        answer = fix_markdown_tables(align_text_images(_answer))
+        print("a1", answer)
+
         _loop_count = 0
 
         # Add evaluation and improvement loop
@@ -262,16 +274,9 @@ class ARag:
                 ),
             )
             _loop_count += 1
-
-        _answer = answer
-
-        for knowledge in extracted_knowledge:
-            a = self.image_referencer_agent.perform_action(answer=_answer, section=knowledge)
-
-            if a != "":
-                _answer = a
-        answer = fix_markdown_tables(align_text_images(_answer))
+        print("-" * 30)
+        print("a2", answer)
 
         return format_references(process_citations(answer=answer,
                                                    text_chunks=merged_knowledge,
-                                                   threshold=0.5))
+                                                   threshold=0.5)).strip()
