@@ -229,17 +229,27 @@ class ARag:
             "action-answer", self.process_agent.perform_action(query=query, action="generating_answer_successful")
         )
 
+        # Add status update for image referencing
+        _answer = draft_answer
+        for knowledge in extracted_knowledge:
+            a = self.image_referencer_agent.perform_action(answer=_answer, section=knowledge)
+
+            if a != "":
+                _answer = a
+
+        answer = fix_markdown_tables(align_text_images(_answer))
+
         _loop_count = 0
 
         # Add evaluation and improvement loop
         while _loop_count <= 3:
             improvement_decision, feedback = self.evaluator_agent.perform_action(
-                query=query, knowledge_chunks=merged_knowledge, answer=draft_answer
+                query=query, knowledge_chunks=merged_knowledge, answer=answer
             )
             self._update_status(
                 "action-evaluate",
                 self.process_agent.perform_action(
-                    query=query, 
+                    query=query,
                     action=f"evaluate_answer_successful_iteration_{_loop_count + 1}", 
                     outcome=f"Improvement needed: {not improvement_decision}"
                 ),
@@ -249,34 +259,18 @@ class ARag:
                 break
 
             # Add status update for improvement
-            draft_answer = self.improver_agent.perform_action(
-                query=query, original_answer=draft_answer, knowledge_chunks=merged_knowledge, feedback=feedback
+            answer = self.improver_agent.perform_action(
+                query=query, original_answer=answer, knowledge_chunks=merged_knowledge, feedback=feedback
             )
             self._update_status(
                 "action-improve",
                 self.process_agent.perform_action(
-                    query=query, 
+                    query=query,
                     action=f"improve_answer_successful_iteration_{_loop_count + 1}", 
                     outcome="Answer improved based on feedback"
                 ),
             )
-
             _loop_count += 1
-
-        _answer = draft_answer
-
-        # Add status update for image referencing
-        for knowledge in extracted_knowledge:
-            a = self.image_referencer_agent.perform_action(answer=_answer, section=knowledge)
-
-            if a != "":
-                _answer = a
-        self._update_status(
-            "action-image-reference",
-            self.process_agent.perform_action(query=query, action="integrating_images_successful"),
-        )
-
-        answer = fix_markdown_tables(align_text_images(_answer))
 
         return format_references(process_citations(answer=answer,
                                                    text_chunks=merged_knowledge,
