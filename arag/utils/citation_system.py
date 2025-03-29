@@ -29,7 +29,7 @@ def split_text(text: str, min_segment_length: int = 10):
     image_patterns = [
         r"!\[[^\]]*\]\([^)]+\)",  # Markdown images
         r"<img[^>]+>",  # HTML images
-        r'<div[^>]*>.*?</div>',  # General divs (multi-line)
+        r"<div[^>]*>.*?</div>",  # General divs (multi-line)
     ]
 
     for pattern in image_patterns:
@@ -256,7 +256,6 @@ def add_citations(
     threshold: float = 0.5,
     get_embeddings_func=None,
     min_length: int = 30,
-    original_text: str = None,
 ):
     """
     Add citations to answer segments based on similarity to reference content.
@@ -267,19 +266,16 @@ def add_citations(
         threshold (float): Similarity threshold for citation (default: 0.5)
         get_embeddings_func: Function to get embeddings from text
         min_length (int): Minimum text length for citation consideration
-        original_text (str): The original text to help preserve formatting
 
     Returns:
         str: Text with citations added
     """
-    # Save original text for reference when rebuilding
-    text = original_text
     if not get_embeddings_func:
         raise ValueError("A function to get embeddings must be provided")
 
     # Skip processing if no page boundaries or segments
     if not page_boundaries or not answer_segments:
-        return original_text if original_text else "\n\n".join([s["content"] for s in answer_segments])
+        return "\n\n".join([s["content"] for s in answer_segments])
 
     # Process page boundaries to get embeddings
     for page in page_boundaries:
@@ -302,7 +298,7 @@ def add_citations(
         chunks_vectors = np.stack([page["vector"] for page in page_boundaries], axis=0)
     except ValueError:
         print("Warning: Could not stack vectors, dimensions may not match")
-        return original_text if original_text else "\n\n".join([s["content"] for s in answer_segments])
+        return "\n\n".join([s["content"] for s in answer_segments])
 
     # Types of content that shouldn't be cited
     no_citation_types = {"image", "header", "code", "table"}
@@ -358,25 +354,25 @@ def add_citations(
     while i < len(selected_idxs):
         segment, idx = selected_idxs[i]
         segment_type = segment.get("type", "")
-        
+
         # Check if this is a header with a citation
         if "header" in segment_type and idx != -1:
             # Add header with its citation
             header_citation = idx
             processed_idxs.append((segment, header_citation))
             i += 1
-            
+
             # Look ahead for consecutive list items with the same citation
             while i < len(selected_idxs) and "list" in selected_idxs[i][0].get("type", ""):
                 list_segment, list_idx = selected_idxs[i]
-                
+
                 # If list item has the same citation as header, remove its citation
                 if list_idx == header_citation:
                     processed_idxs.append((list_segment, -1))  # Remove citation
                 else:
                     # Different citation, keep it
                     processed_idxs.append((list_segment, list_idx))
-                
+
                 i += 1
         else:
             # Process consecutive segments with the same citation
@@ -387,18 +383,20 @@ def add_citations(
                 group_segments = []
                 group_segments.append((segment, current_citation))
                 j = i + 1
-                
+
                 # Group up to 3 consecutive segments with same citation
-                while (j < len(selected_idxs) and 
-                       selected_idxs[j][1] == current_citation and 
-                       len(group_segments) < 3 and
-                       "header" not in selected_idxs[j][0].get("type", "") and
-                       "list" not in selected_idxs[j][0].get("type", "")):
+                while (
+                    j < len(selected_idxs)
+                    and selected_idxs[j][1] == current_citation
+                    and len(group_segments) < 3
+                    and "header" not in selected_idxs[j][0].get("type", "")
+                    and "list" not in selected_idxs[j][0].get("type", "")
+                ):
                     next_segment, _ = selected_idxs[j]
                     group_segment_types.add(next_segment.get("type", ""))
                     group_segments.append((next_segment, -1))  # Remove duplicate citation
                     j += 1
-                
+
                 # If we found a group, add it
                 if len(group_segments) > 1:
                     processed_idxs.extend(group_segments)
@@ -411,7 +409,7 @@ def add_citations(
                 # No citation, add as is
                 processed_idxs.append((segment, idx))
                 i += 1
-    
+
     # Map to page numbers using processed_idxs
     updated_sections = []
     for s, idx in processed_idxs:
@@ -428,8 +426,8 @@ def add_citations(
 
     unique_indexes = sorted(set(unique_indexes))
 
-    # Create a mapping from page numbers to citation indices
-    citation_map = {page: idx for idx, page in enumerate(unique_indexes)}
+    # Create a mapping from page numbers to citation indices - FIX: Start from 1 instead of 0
+    citation_map = {page: idx + 1 for idx, page in enumerate(unique_indexes)}
 
     # Build the final text with citations
     # Reconstruct the original text structure, preserving relative positions
@@ -452,70 +450,62 @@ def add_citations(
     # Sort segments by their original position
     segments_with_citations.sort(key=lambda x: x[0]["start"])
 
-    # Build final text while preserving original markdown structure
-    result_text = ""
-    last_end = 0
-    
-    # Sort by start position to preserve document flow
-    segments_with_citations.sort(key=lambda x: x[0]["start"])
-    
+    # Build final text by adding appropriate spacing
+    final_segments = []
+    previous_type = None
+
     for i, (segment, content) in enumerate(segments_with_citations):
         segment_type = segment.get("type", "")
-        segment_start = segment.get("start", 0)
-        segment_end = segment.get("end", 0)
-        
-        # For the first segment, check if there was leading content
-        if i == 0 and segment_start > 0:
-            result_text += text[:segment_start]
-            
-        # Handle whitespace between segments to preserve original formatting
-        if i > 0:
-            prev_end = segments_with_citations[i-1][0].get("end", 0)
-            
-            # If there's a gap between segments, preserve original whitespace
-            if segment_start > prev_end:
-                original_whitespace = text[prev_end:segment_start]
-                # Keep original spacing but ensure we don't have excessive newlines
-                if original_whitespace.strip() == "":
-                    # Just whitespace - preserve line breaks but prevent excess
-                    line_breaks = original_whitespace.count("\n")
-                    if line_breaks > 0:
-                        # Cap at 2 line breaks to prevent excessive spacing
-                        result_text += "\n" * min(line_breaks, 2)
-                    else:
-                        # Preserve exact spaces if no line breaks
-                        result_text += original_whitespace
-                else:
-                    # Contains actual content - preserve it
-                    result_text += original_whitespace
-        
-        # Add the segment with citation
-        # Handle special cases for citation positioning based on segment type
-        if "header" in segment_type:
-            # For headers, place citation at the end of the line
-            result_text += content
+
+        # Determine how to join this segment
+        if "image" in segment_type or "table" in segment_type:
+            # Images and tables get extra spacing
+            final_segments.append("")
+            final_segments.append(content)
+            final_segments.append("")
+        elif "header" in segment_type:
+            # Headers get extra spacing
+            if previous_type and previous_type != "header":
+                final_segments.append("")
+            final_segments.append(content)
         elif "list" in segment_type:
-            # For lists, citations need to be integrated without breaking list structure
-            result_text += content
-        elif "image" in segment_type or "table" in segment_type:
-            # For images and tables, use original content with citation after
-            result_text += content
-        elif "code" in segment_type:
-            # For code blocks, citation should be after the block, not inside
-            result_text += content
+            # Lists get preserved as is
+            final_segments.append(content)
+        elif i > 0 and "header" in segments_with_citations[i - 1][0].get("type", ""):
+            # Text after headers doesn't need extra spacing
+            final_segments.append(content)
+        elif previous_type and previous_type == "sentence" and segment_type == "sentence":
+            # Add double line break between paragraphs
+            final_segments.append("")
+            final_segments.append(content)
         else:
             # Regular text
-            result_text += content
-            
-        last_end = segment_end
-        
-    # Add any trailing content
-    if last_end < len(text):
-        result_text += text[last_end:]
-        
-    # Clean up excess whitespace but preserve intentional formatting
-    # Convert more than 3 newlines to 2 newlines
-    full_text = re.sub(r"\n{3,}", "\n\n", result_text)
+            final_segments.append(content)
+
+        previous_type = segment_type
+
+    # Join with double line breaks - FIX: Use double newlines for paragraph separation
+    # First, convert empty strings to explicit paragraph markers
+    marked_segments = []
+    for segment in final_segments:
+        if not segment:
+            marked_segments.append("__PARAGRAPH_BREAK__")
+        else:
+            marked_segments.append(segment)
+
+    # Now join segments with appropriate breaks
+    parts = []
+    for segment in marked_segments:
+        if segment == "__PARAGRAPH_BREAK__":
+            # Don't add the marker to the output text
+            continue
+        parts.append(segment)
+
+    # Join all parts with double newlines to ensure paragraph separation
+    full_text = "\n\n".join(parts)
+
+    # Clean up multiple blank lines
+    full_text = re.sub(r"\n{3,}", "\n\n", full_text)
 
     return full_text.strip()
 
@@ -537,5 +527,4 @@ def process_citations(answer, text_chunks, threshold=0.5, get_embeddings_func=No
         page_boundaries=page_boundaries,
         threshold=threshold,
         get_embeddings_func=get_embeddings_func,
-        original_text=answer,
     )

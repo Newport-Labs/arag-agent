@@ -1,5 +1,5 @@
 import concurrent.futures
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from openai import OpenAI
 
@@ -9,8 +9,8 @@ from arag.arag_agents import (AnswerAgent, DocumentSelectionAgent,
                               ProcessAgent, QueryRewriterAgent)
 from arag.prompts import PROMPTS
 from arag.utils.citation_system import process_citations
-from arag.utils.text_utils import (align_text_images, fix_markdown_tables,
-                                   format_references, remove_almost_duplicates)
+from arag.utils.text_utils import (align_text_images, format_references,
+                                   remove_almost_duplicates)
 from arag.utils.vectordb_utils import (_get_chunks, _get_embeddings,
                                        _get_metadata)
 
@@ -160,6 +160,43 @@ class ARag:
         # Filter chunks that are already in extracted_knowledge or don't contain the section
         return [chunk for chunk in chunks if chunk not in extracted_knowledge and section in chunk]
 
+    def _filter_and_process_chunk(self, args: Tuple) -> Optional[str]:
+        """Process a single chunk with knowledge agent."""
+        wilf, chunk = args
+
+        try:
+            extracted_knowledge = self.knowledge_agent.perform_action(query=wilf, document_chunk=chunk)
+        except Exception as e:
+            try:
+                _knowledge_prompt = (
+                    self.system_prompts["knowledge_extractor"]
+                    + "\n\nYou MUST COMPRESS the information as MUCH as you can while PREVERVING THE MOST IMPORTANT PARTS!"
+                )
+                self.knowledge_agent.system_prompt = _knowledge_prompt
+                extracted_knowledge = self.knowledge_agent.perform_action(query=wilf, document_chunk=chunk)
+                self.knowledge_agent.system_prompt = self.system_prompts["knowledge_extractor"]
+            except Exception as e:
+                return chunk
+        return extracted_knowledge
+
+    def _process_queries_in_parallel(
+        self, search_queries: List[str], filename: str, num_chunks: int, section: str, extracted_knowledge: Set[str]
+    ) -> List[str]:
+        """Process all search queries in parallel and return unique chunks."""
+        # Create a list of tasks, each with its own argument
+        tasks = []
+        for query in search_queries:
+            tasks.append((query, filename, num_chunks, section, extracted_knowledge))
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            chunks_results = list(executor.map(lambda args: self._get_chunks_for_query(*args), tasks))
+
+        # Flatten results and remove duplicates
+        _extracted = []
+        for chunks in chunks_results:
+            _extracted.extend(chunks)
+        return list(set(_extracted))
+
     def _process_extraction_item(
         self, o: Any, chosen_metadata: Dict[str, Any], extracted_knowledge: Set[str], num_chunks: int
     ) -> List[str]:
@@ -169,34 +206,29 @@ class ARag:
         section = o.section
 
         # First parallel operation: process all search queries concurrently
-        # Create a list of tasks, each with its own argument
-        tasks = []
-        for query in search_queries:
-            tasks.append((query, chosen_metadata["filename"], num_chunks, section, extracted_knowledge))
-
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            chunks_results = list(executor.map(lambda args: self._get_chunks_for_query(*args), tasks))
-
-        # Flatten results and remove duplicates
-        _extracted = []
-        for chunks in chunks_results:
-            _extracted.extend(chunks)
-        _extracted = list(set(_extracted))
+        _extracted = self._process_queries_in_parallel(
+            search_queries, chosen_metadata["filename"], num_chunks, section, extracted_knowledge
+        )
 
         # Second parallel operation: process all extracted chunks with knowledge agent
         if _extracted:
             # Create a list of tasks for the knowledge agent
             tasks = [(wilf, chunk) for chunk in _extracted]
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                results = list(
-                    executor.map(
-                        lambda args: self.knowledge_agent.perform_action(query=args[0], document_chunk=args[1]), tasks
-                    )
-                )
+                results = list(executor.map(self._filter_and_process_chunk, tasks))
 
             return [result for result in results if result]  # Filter out empty results
 
         return []
+
+    def _process_output_knowledge(self, new_knowledge: str) -> Optional[str]:
+        """Process a single knowledge item and return it if valid."""
+        try:
+            if new_knowledge.split("\n")[1].startswith("#"):
+                return new_knowledge
+        except:
+            pass
+        return None
 
     def missing_info_extraction(
         self,
@@ -206,34 +238,30 @@ class ARag:
         num_chunks: int = 7,
     ) -> List[str]:
         """Main function to parallelize the entire knowledge extraction process."""
-        newly_extracted_knowledge = []
-
-        # Create a list of tasks for each item in out
-        tasks = [(item, chosen_metadata, extracted_knowledge, num_chunks) for item in missing_sections]
-
         # Process all extraction items in parallel
         with concurrent.futures.ThreadPoolExecutor() as executor:
+            tasks = [(item, chosen_metadata, extracted_knowledge, num_chunks) for item in missing_sections]
             results = list(executor.map(lambda args: self._process_extraction_item(*args), tasks))
 
         # Flatten the results
+        newly_extracted_knowledge = []
         for result_list in results:
             newly_extracted_knowledge.extend(result_list)
 
         # Remove duplicates and empty strings
-        newly_extracted_knowledge = list(set(newly_extracted_knowledge))
-        newly_extracted_knowledge = [k for k in newly_extracted_knowledge if k != ""]
+        newly_extracted_knowledge = list(set([k for k in newly_extracted_knowledge if k != ""]))
 
+        # Process output knowledge in parallel
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            processed_results = list(executor.map(self._process_output_knowledge, newly_extracted_knowledge))
+
+        # Filter out None values and duplicates
         output_knowledge = []
-
-        for new_knowledge in newly_extracted_knowledge:
-            try:
-                if (
-                    new_knowledge.split("\n")[1].startswith("#")
-                    and new_knowledge.split("\n")[1] not in output_knowledge
-                ):
-                    output_knowledge.append(new_knowledge)
-            except:
-                continue
+        seen = set()
+        for result in processed_results:
+            if result and result.split("\n")[1] not in seen:
+                seen.add(result.split("\n")[1])
+                output_knowledge.append(result)
 
         return output_knowledge
 
@@ -363,9 +391,6 @@ class ARag:
         return outs
 
     def search(self, query: str) -> str:
-        # Initialize search process
-        self._update_status("search_init", self.process_agent.perform_action(query=query, action="initialize_search"))
-
         # Extract metadata from available documents
         self._update_status(
             "metadata_extract", self.process_agent.perform_action(query=query, action="extract_metadata")
@@ -407,6 +432,7 @@ class ARag:
 
         # Extract knowledge from chunks
         extracted_knowledge = self.extract_knowledge(retrieved_chunks=retrieved_chunks, query=query, max_workers=8)
+
         self._update_status(
             "knowledge_extract",
             self.process_agent.perform_action(
@@ -451,4 +477,3 @@ class ARag:
             pass
 
         return answer
-    
