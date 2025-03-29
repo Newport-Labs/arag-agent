@@ -374,11 +374,7 @@ class ARag:
         metadata = _get_metadata(self._vectordb_endpoint)
 
         # Select the most relevant document
-        chosen_file = self.document_selection_agent.perform_action(query=query, files_metadata=metadata)
-        self._update_status(
-            "doc_select",
-            self.process_agent.perform_action(query=query, action="document_selection_successful", outcome=chosen_file),
-        )
+        chosen_file = "31211033 - JLG 642, 742, 943, 1043, 1055, 1255"
 
         for m in metadata:
             if m["filename"] == chosen_file:
