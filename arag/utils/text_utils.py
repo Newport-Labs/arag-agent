@@ -1,5 +1,6 @@
 import re
-from collections import defaultdict
+
+import Levenshtein
 
 
 def convert_citations(text):
@@ -209,4 +210,13 @@ def format_references(text):
                     lambda m: f"[{m.group(1)}](doc1.pdf#page={m.group(2)})", 
                     text)
     
+    return result
+
+
+def remove_almost_duplicates(strings, threshold=2):
+    result = []
+    for s in strings:
+        # Check if this string is too similar to any already in our result
+        if not any(Levenshtein.distance(s, existing) <= threshold for existing in result):
+            result.append(s)
     return result

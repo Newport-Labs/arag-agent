@@ -10,8 +10,9 @@ from arag.arag_agents import (AnswerAgent, DocumentSelectionAgent,
 from arag.prompts import PROMPTS
 from arag.utils.citation_system import process_citations
 from arag.utils.text_utils import (align_text_images, fix_markdown_tables,
-                                   format_references)
-from arag.utils.vectordb_utils import _get_chunks, _get_metadata
+                                   format_references, remove_almost_duplicates)
+from arag.utils.vectordb_utils import (_get_chunks, _get_embeddings,
+                                       _get_metadata)
 
 
 class ARag:
@@ -160,18 +161,18 @@ class ARag:
         return [chunk for chunk in chunks if chunk not in extracted_knowledge and section in chunk]
 
     def _process_extraction_item(
-        self, o: Any, chosen_metadata: Dict[str, Any], extracted_knowledge: Set[str]
+        self, o: Any, chosen_metadata: Dict[str, Any], extracted_knowledge: Set[str], num_chunks: int
     ) -> List[str]:
         """Process a single extraction item and return extracted knowledge."""
         wilf = o.what_im_looking_for
-        search_queries = o.extraction_query
+        search_queries = self.rewrite_query(query=wilf, chosen_metadata=chosen_metadata, num_rewrites=7)
         section = o.section
 
         # First parallel operation: process all search queries concurrently
         # Create a list of tasks, each with its own argument
         tasks = []
         for query in search_queries:
-            tasks.append((query, chosen_metadata["filename"], 3, section, extracted_knowledge))
+            tasks.append((query, chosen_metadata["filename"], num_chunks, section, extracted_knowledge))
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
             chunks_results = list(executor.map(lambda args: self._get_chunks_for_query(*args), tasks))
@@ -198,13 +199,17 @@ class ARag:
         return []
 
     def missing_info_extraction(
-        self, missing_sections: List[Any], chosen_metadata: Dict[str, Any], extracted_knowledge: Set[str]
+        self,
+        missing_sections: List[Any],
+        chosen_metadata: Dict[str, Any],
+        extracted_knowledge: Set[str],
+        num_chunks: int = 7,
     ) -> List[str]:
         """Main function to parallelize the entire knowledge extraction process."""
         newly_extracted_knowledge = []
 
         # Create a list of tasks for each item in out
-        tasks = [(item, chosen_metadata, extracted_knowledge) for item in missing_sections]
+        tasks = [(item, chosen_metadata, extracted_knowledge, num_chunks) for item in missing_sections]
 
         # Process all extraction items in parallel
         with concurrent.futures.ThreadPoolExecutor() as executor:
@@ -218,7 +223,19 @@ class ARag:
         newly_extracted_knowledge = list(set(newly_extracted_knowledge))
         newly_extracted_knowledge = [k for k in newly_extracted_knowledge if k != ""]
 
-        return newly_extracted_knowledge
+        output_knowledge = []
+
+        for new_knowledge in newly_extracted_knowledge:
+            try:
+                if (
+                    new_knowledge.split("\n")[1].startswith("#")
+                    and new_knowledge.split("\n")[1] not in output_knowledge
+                ):
+                    output_knowledge.append(new_knowledge)
+            except:
+                continue
+
+        return output_knowledge
 
     def _retrieve_chunks(self, prompt, filename, num_chunks):
         chunks = _get_chunks(
@@ -243,7 +260,41 @@ class ARag:
         # Remove duplicates
         return list(set(all_chunks))
 
-    # Example implementation of the perform_action method for your process_agent
+    # Define the worker function
+    def _rewrite_query(self, query, chosen_metadata):
+        return self.query_rewriter.perform_action(
+            query=query, summary=chosen_metadata["summary"], table_of_contents=str(chosen_metadata["table_of_contents"])
+        )
+
+    def rewrite_query(self, query, chosen_metadata, num_rewrites=5):
+        """
+        Parallelize the query rewriting process using ThreadPoolExecutor.
+
+        Args:
+            query (str): The original query to rewrite
+            chosen_metadata (dict): Metadata containing summary and table of contents
+            num_rewrites (int): Number of rewrites to perform
+
+        Returns:
+            list: Unique rewritten prompts
+        """
+        rewritten_prompts = []
+
+        # Use ThreadPoolExecutor for parallel execution
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            # Submit all tasks
+            future_results = [executor.submit(self._rewrite_query, query, chosen_metadata) for _ in range(num_rewrites)]
+
+            # Collect results as they complete
+            for future in concurrent.futures.as_completed(future_results):
+                try:
+                    result = future.result()
+                    rewritten_prompts.extend(result)
+                except Exception as e:
+                    print(f"Error in parallel execution: {e}")
+
+        # Return unique prompts
+        return list(set(rewritten_prompts))
 
     def perform_action(self, query=None, action=None, outcome=None):
         """Generate narration messages for each step of the search process."""
@@ -269,6 +320,48 @@ class ARag:
 
         return messages.get(action, f"Performing {action}...")
 
+    def _process_missing_info(self, e, chosen_metadata):
+        """Process a single knowledge item."""
+        return self.missing_info_agent.perform_action(
+            text_chunk=e,
+            table_of_contents=chosen_metadata["table_of_contents"],
+            file_summary=chosen_metadata["summary"],
+        )
+
+    def process_missing_info(self, extracted_knowledge, chosen_metadata, max_workers=None):
+        """
+        Process extracted knowledge items in parallel.
+
+        Parameters:
+        - extracted_knowledge: List of knowledge items to process
+        - missing_info: The object with the perform_action method
+        - chosen_metadata: Dictionary containing metadata
+        - max_workers: Maximum number of worker threads (None = auto-determine based on system)
+
+        Returns:
+        - List of processed outputs
+        """
+        outs = []
+
+        # Using ThreadPoolExecutor since this is likely an I/O-bound task
+        # For CPU-bound tasks, use ProcessPoolExecutor instead
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Create a future for each knowledge item
+            future_to_item = {
+                executor.submit(self._process_missing_info, e, chosen_metadata): e for e in extracted_knowledge
+            }
+
+            # Process results as they complete
+            for future in concurrent.futures.as_completed(future_to_item):
+                try:
+                    result = future.result()
+                    outs.extend(result)
+                except Exception as exc:
+                    item = future_to_item[future]
+                    print(f"Processing of {item} generated an exception: {exc}")
+
+        return outs
+
     def search(self, query: str) -> str:
         # Initialize search process
         self._update_status("search_init", self.process_agent.perform_action(query=query, action="initialize_search"))
@@ -293,9 +386,8 @@ class ARag:
                 break
 
         # Rewrite query for better retrieval
-        rewritten_prompts = self.query_rewriter.perform_action(
-            query=query, summary=chosen_metadata["summary"], table_of_contents=str(chosen_metadata["table_of_contents"])
-        )
+        rewritten_prompts = self.rewrite_query(query=query, chosen_metadata=chosen_metadata, num_rewrites=7)
+
         self._update_status(
             "query_refine",
             self.process_agent.perform_action(
@@ -304,7 +396,8 @@ class ARag:
         )
 
         # Retrieve relevant document chunks
-        retrieved_chunks = self.retrieve_chunks(prompts=rewritten_prompts, filename=chosen_file, num_chunks=3)
+        retrieved_chunks = self.retrieve_chunks(prompts=rewritten_prompts, filename=chosen_file, num_chunks=5)
+
         self._update_status(
             "chunk_retrieve",
             self.process_agent.perform_action(
@@ -313,7 +406,7 @@ class ARag:
         )
 
         # Extract knowledge from chunks
-        extracted_knowledge = self.extract_knowledge(retrieved_chunks=retrieved_chunks, query=query, max_workers=4)
+        extracted_knowledge = self.extract_knowledge(retrieved_chunks=retrieved_chunks, query=query, max_workers=8)
         self._update_status(
             "knowledge_extract",
             self.process_agent.perform_action(
@@ -323,6 +416,21 @@ class ARag:
             ),
         )
 
+        # Check for missing information
+        missing_sections = self.process_missing_info(
+            extracted_knowledge=extracted_knowledge, chosen_metadata=chosen_metadata
+        )
+
+        missing_knowledge = self.missing_info_extraction(
+            missing_sections=missing_sections,
+            chosen_metadata=chosen_metadata,
+            extracted_knowledge=extracted_knowledge,
+            num_chunks=7,
+        )
+
+        extracted_knowledge.extend(missing_knowledge)
+        extracted_knowledge = remove_almost_duplicates(extracted_knowledge)
+
         merged_knowledge = "\n".join(extracted_knowledge)
 
         # Generate initial answer
@@ -331,88 +439,15 @@ class ARag:
             "answer_generate", self.process_agent.perform_action(query=query, action="generating_answer_successful")
         )
 
-        # Check for missing information
-        missing_sections = self.missing_info_agent.perform_action(
-            text_chunk=answer,
-            table_of_contents=chosen_metadata["table_of_contents"],
-            file_summary=chosen_metadata["summary"],
-        )
+        answer = align_text_images(answer)
 
         try:
-            missing_knowledge = self.missing_info_extraction(
-                missing_sections=missing_sections,
-                chosen_metadata=chosen_metadata,
-                extracted_knowledge=extracted_knowledge,
-            )
-
-            if len(missing_knowledge) > 0:
-                extracted_knowledge.extend(missing_knowledge)
-                answer = self.answer_agent.perform_action(query=query, document_chunks=extracted_knowledge)
+            answer = format_references(
+                process_citations(
+                    answer=answer, text_chunks=merged_knowledge, threshold=0.4, get_embeddings_func=_get_embeddings
+                )
+            ).strip()
         except Exception as e:
-            try:
-                new_knowledge_agent_prompt = (
-                    self.system_prompts["knowledge_extractor"]
-                    + "\n\nCompress the information, it should not be bigger than 4000 tokens! THIS IS A MUST!"
-                )
-                self.knowledge_agent.system_prompt = new_knowledge_agent_prompt
+            pass
 
-                missing_knowledge = self.missing_info_extraction(
-                    missing_sections=missing_sections,
-                    chosen_metadata=chosen_metadata,
-                    extracted_knowledge=extracted_knowledge,
-                )
-                if len(missing_knowledge) > 0:
-                    extracted_knowledge.extend(missing_knowledge)
-                    answer = self.answer_agent.perform_action(query=query, document_chunks=extracted_knowledge)
-
-                self.knowledge_agent.system_prompt = new_knowledge_agent_prompt = self.system_prompts[
-                    "knowledge_extractor"
-                ]
-            except Exception as e:
-                pass
-
-        merged_knowledge = ("\n").join(extracted_knowledge)
-
-        _loop_count = 0
-
-        # Evaluate and improve answer
-        while _loop_count <= 2:
-            improvement_decision, feedback = self.evaluator_agent.perform_action(
-                query=query, knowledge_chunks=merged_knowledge, answer=answer
-            )
-            self._update_status(
-                "answer_evaluate",
-                self.process_agent.perform_action(
-                    query=query,
-                    action=f"evaluate_answer_successful_iteration_{_loop_count + 1}",
-                    outcome=f"Improvement needed: {not improvement_decision}",
-                ),
-            )
-
-            if improvement_decision:
-                break
-
-            # Improve answer based on feedback
-            answer = self.improver_agent.perform_action(
-                query=query, original_answer=answer, knowledge_chunks=merged_knowledge, feedback=feedback
-            )
-
-            self._update_status(
-                "answer_refine",
-                self.process_agent.perform_action(
-                    query=query,
-                    action=f"improve_answer_successful_iteration_{_loop_count + 1}",
-                    outcome="Answer improved based on feedback",
-                ),
-            )
-            _loop_count += 1
-
-        # Format citations
-        # try:
-        #     answer = format_references(
-        #         process_citations(answer=answer, text_chunks=merged_knowledge, threshold=0.6)
-        #     ).strip()
-        # except Exception as e:
-        #     pass
-
-        return align_text_images(answer)
+        return answer

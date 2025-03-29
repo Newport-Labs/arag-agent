@@ -20,7 +20,7 @@ def _get_metadata(vectordb_endopoint):
     return response.json()
 
 
-def get_embeddings(text, model="nomic-embed-text", api_url="http://localhost:11434"):
+def _get_embeddings(text, model="nomic-embed-text", api_url="http://localhost:11434"):
     """
     Get embeddings for the provided text using Ollama API.
 

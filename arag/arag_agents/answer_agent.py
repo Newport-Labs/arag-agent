@@ -4,7 +4,11 @@ from pydantic import BaseModel
 
 from .decorators import register_action
 from .template_agent import BaseAgent
-from .utils.agent_primitives import client_message, client_sturctured_message
+from .utils.agent_primitives import client_message
+
+
+class AnswerSchema(BaseModel):
+    answer: str
 
 
 class AnswerAgent(BaseAgent):
@@ -36,7 +40,7 @@ class AnswerAgent(BaseAgent):
             model=self.model + "-thinking-exp",
             user_message=self._message(
                 query=query, document_chunks=document_chunks, conversation_summary=conversation_summary
-            )
+            ),
         )
 
         return response, usage_metadata

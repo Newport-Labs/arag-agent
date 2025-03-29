@@ -29,7 +29,6 @@ class KnowledgeAgent(BaseAgent):
             model=self.model,
             user_message=self._message(query=query, document_chunk=document_chunk),
             structured_output_schema=KnowledgeSchema,
-            temperature=0.0,
         )
 
         return response.knowledge, usage_metadata

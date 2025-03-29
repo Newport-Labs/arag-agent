@@ -9,7 +9,6 @@ from .utils.agent_primitives import client_sturctured_message
 class MissingInfoSubSchema(BaseModel):
     reference_context: str
     what_im_looking_for: str
-    extraction_query: List[str]
     section: str
 
 
