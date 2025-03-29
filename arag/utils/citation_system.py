@@ -1,4 +1,7 @@
+import multiprocessing
 import re
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from functools import partial
 from typing import Dict, List
 
 import numpy as np
@@ -250,7 +253,70 @@ def parse_chunks_with_position(extracted_knowledge: str):
     return page_boundaries
 
 
-def add_citations(
+def get_embedding_for_page(page, get_embeddings_func):
+    """Get embedding for a single page - for parallel processing"""
+    content = page["content"]
+    # Handle empty content
+    if not content or not isinstance(content, str) or len(content.strip()) < 10:
+        return np.zeros((768,))  # Use default dimension
+
+    try:
+        return get_embeddings_func(text=content)
+    except Exception as e:
+        print(f"Error getting embeddings: {e}")
+        # Use zero vector as fallback
+        return np.zeros((768,))
+
+
+def process_segment_for_citation(
+    segment_data, chunks_vectors, page_boundaries, threshold, get_embeddings_func, min_length=30
+):
+    """Process a single segment for citation matching - for parallel processing"""
+    segment, segment_idx = segment_data
+
+    # Types of content that shouldn't be cited
+    no_citation_types = {"image", "header", "code", "table"}
+
+    # Check if this is a protected segment type that shouldn't get citations
+    segment_type = segment.get("type", "")
+
+    # Images and headers never get citations
+    if any(t in segment_type.split(",") for t in no_citation_types) or segment.get("protected", False):
+        return (segment_idx, -1)
+
+    # Lists are usually cited, but we need to check content
+    if "list" in segment_type:
+        # Check if this list has sections that shouldn't be cited (like "Remedy:")
+        content = segment["content"]
+        if "Remedy:" in content or "remedy:" in content or len(content) < min_length:
+            return (segment_idx, -1)
+
+    # Check if content is too short for citation
+    content = segment["content"]
+    if len(content) < min_length:
+        return (segment_idx, -1)
+
+    # Skip citation for obvious references
+    if "refer to section" in content.lower() or "see section" in content.lower():
+        return (segment_idx, -1)
+
+    try:
+        segment_vector = np.array(get_embeddings_func(text=content))[None, ...]
+        scores = cosine_similarity(segment_vector, chunks_vectors)
+        max_score = np.max(scores)
+
+        if max_score > threshold:
+            return (segment_idx, np.argmax(scores).item())
+        else:
+            # Add segments that don't meet threshold without citation
+            return (segment_idx, -1)
+    except Exception as e:
+        print(f"Error processing segment: {e}")
+        # Keep the segment without citation if there's an error
+        return (segment_idx, -1)
+
+
+def add_citations_parallel(
     answer_segments: List[Dict],
     page_boundaries: List[Dict],
     threshold: float = 0.5,
@@ -259,6 +325,7 @@ def add_citations(
 ):
     """
     Add citations to answer segments based on similarity to reference content.
+    This version uses parallel processing for improved performance.
 
     Args:
         answer_segments (List[Dict]): List of text segments with metadata
@@ -277,21 +344,20 @@ def add_citations(
     if not page_boundaries or not answer_segments:
         return "\n\n".join([s["content"] for s in answer_segments])
 
-    # Process page boundaries to get embeddings
-    for page in page_boundaries:
-        content = page["content"]
-        # Handle empty content
-        if not content or not isinstance(content, str) or len(content.strip()) < 10:
-            page["vector"] = np.zeros((768,))  # Use default dimension
-            continue
+    # Determine number of workers (CPUs)
+    num_workers = max(1, multiprocessing.cpu_count() - 1)  # Leave one CPU free
 
-        try:
-            vector = get_embeddings_func(text=content)
-            page["vector"] = vector
-        except Exception as e:
-            print(f"Error getting embeddings: {e}")
-            # Use zero vector as fallback
-            page["vector"] = np.zeros((768,))
+    # Process page boundaries to get embeddings in parallel
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        # Create a partial function with the embedding function
+        get_embedding_partial = partial(get_embedding_for_page, get_embeddings_func=get_embeddings_func)
+
+        # Process pages in parallel
+        embeddings = list(executor.map(get_embedding_partial, page_boundaries))
+
+        # Assign embeddings back to pages
+        for i, page in enumerate(page_boundaries):
+            page["vector"] = embeddings[i]
 
     # Stack vectors for efficient similarity computation
     try:
@@ -300,53 +366,28 @@ def add_citations(
         print("Warning: Could not stack vectors, dimensions may not match")
         return "\n\n".join([s["content"] for s in answer_segments])
 
-    # Types of content that shouldn't be cited
-    no_citation_types = {"image", "header", "code", "table"}
+    # Prepare segments for parallel processing
+    segment_data = [(segment, i) for i, segment in enumerate(answer_segments)]
 
+    # Process segments in parallel
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        # Create a partial function with fixed arguments
+        process_segment_partial = partial(
+            process_segment_for_citation,
+            chunks_vectors=chunks_vectors,
+            page_boundaries=page_boundaries,
+            threshold=threshold,
+            get_embeddings_func=get_embeddings_func,
+            min_length=min_length,
+        )
+
+        # Process segments in parallel and get results
+        citation_results = list(executor.map(process_segment_partial, segment_data))
+
+    # Convert results back to the format expected by post-processing
     selected_idxs = []
-
-    for segment in answer_segments:
-        # Check if this is a protected segment type that shouldn't get citations
-        segment_type = segment.get("type", "")
-
-        # Images and headers never get citations
-        if any(t in segment_type.split(",") for t in no_citation_types) or segment.get("protected", False):
-            selected_idxs.append((segment, -1))
-            continue
-
-        # Lists are usually cited, but we need to check content
-        if "list" in segment_type:
-            # Check if this list has sections that shouldn't be cited (like "Remedy:")
-            content = segment["content"]
-            if "Remedy:" in content or "remedy:" in content or len(content) < min_length:
-                selected_idxs.append((segment, -1))
-                continue
-
-        # Check if content is too short for citation
-        content = segment["content"]
-        if len(content) < min_length:
-            selected_idxs.append((segment, -1))
-            continue
-
-        # Skip citation for obvious references
-        if "refer to section" in content.lower() or "see section" in content.lower():
-            selected_idxs.append((segment, -1))
-            continue
-
-        try:
-            segment_vector = np.array(get_embeddings_func(text=content))[None, ...]
-            scores = cosine_similarity(segment_vector, chunks_vectors)
-            max_score = np.max(scores)
-
-            if max_score > threshold:
-                selected_idxs.append((segment, np.argmax(scores).item()))
-            else:
-                # Add segments that don't meet threshold without citation
-                selected_idxs.append((segment, -1))
-        except Exception as e:
-            print(f"Error processing segment: {e}")
-            # Keep the segment without citation if there's an error
-            selected_idxs.append((segment, -1))
+    for idx, citation_idx in citation_results:
+        selected_idxs.append((answer_segments[idx], citation_idx))
 
     # Post-process selected_idxs to group header-list citations
     processed_idxs = []
@@ -511,7 +552,7 @@ def add_citations(
 
 
 def process_citations(answer, text_chunks, threshold=0.5, get_embeddings_func=None):
-    """Main function to process citations"""
+    """Main function to process citations with parallel processing"""
     if not get_embeddings_func:
         raise ValueError("A function to get embeddings must be provided")
 
@@ -521,10 +562,34 @@ def process_citations(answer, text_chunks, threshold=0.5, get_embeddings_func=No
     # Extract segments with metadata
     answer_segments = split_text(text=answer)
 
-    # Find matches and add citations
-    return add_citations(
+    # Find matches and add citations using parallel processing
+    return add_citations_parallel(
         answer_segments=answer_segments,
         page_boundaries=page_boundaries,
         threshold=threshold,
         get_embeddings_func=get_embeddings_func,
     )
+
+
+def chunk_list(lst, chunk_size):
+    """Helper function to divide a list into chunks of specified size"""
+    for i in range(0, len(lst), chunk_size):
+        yield lst[i : i + chunk_size]
+
+
+def batch_process_embeddings(texts, get_embeddings_func, batch_size=16):
+    """Process embeddings in batches for better efficiency"""
+    batches = list(chunk_list(texts, batch_size))
+
+    all_embeddings = []
+    for batch in batches:
+        try:
+            batch_embeddings = get_embeddings_func(texts=batch)  # Assuming the function supports batch processing
+            all_embeddings.extend(batch_embeddings)
+        except TypeError:
+            # If batch processing is not supported, fall back to individual processing
+            for text in batch:
+                embedding = get_embeddings_func(text=text)
+                all_embeddings.append(embedding)
+
+    return all_embeddings
