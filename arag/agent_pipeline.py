@@ -396,7 +396,7 @@ class ARag:
         )
 
         # Retrieve relevant document chunks
-        retrieved_chunks = self.retrieve_chunks(prompts=rewritten_prompts, filename=chosen_file, num_chunks=10)
+        retrieved_chunks = self.retrieve_chunks(prompts=rewritten_prompts, filename=chosen_file, num_chunks=5)
 
         self._update_status(
             "chunk_retrieve",
